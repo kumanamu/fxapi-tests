@@ -1,0 +1,1 @@
+package com.fxapp; public record RateDto(String base, String quote, double price, String asOf, boolean delayed) {}

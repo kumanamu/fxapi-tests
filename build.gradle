@@ -1,0 +1,42 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.3.2'
+    id 'io.spring.dependency-management' version '1.1.5'
+}
+
+group = 'com.fxapp'
+version = '0.1.0'
+
+java {
+    // toolchain으로 JDK 17 강제 (팀/CI 환경에서도 안정)
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+repositories { mavenCentral() }
+
+dependencies {
+    // MVC (기본 서버)
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    // Thymeleaf 템플릿
+    implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
+    // WebClient 사용을 위해 WebFlux 스타터만 추가 (러너는 MVC가 우선)
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+
+    // --- 캐시가 필요할 때만 켜기 ---
+    // implementation 'org.springframework.boot:spring-boot-starter-cache'
+    // implementation 'com.github.ben-manes.caffeine:caffeine:3.1.8'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    compileOnly 'org.projectlombok:lombok:1.18.34'
+    annotationProcessor 'org.projectlombok:lombok:1.18.34'
+
+    testCompileOnly 'org.projectlombok:lombok:1.18.34'
+    testAnnotationProcessor 'org.projectlombok:lombok:1.18.34'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}

@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>KRW FX Chart</title>
+    <style>
+        :root { color-scheme: dark; }
+        body { margin:0; background:#0f1520; color:#e6e8eb; font-family:ui-sans-serif,-apple-system,Segoe UI,Roboto,Arial; }
+        .top { display:flex; gap:10px; align-items:center; padding:10px 14px; background:#0b101a; border-bottom:1px solid #1d2430; }
+        .wrap { padding:16px; }
+        #chartWrap { background:#0b101a; border:1px solid #1d2430; border-radius:10px; padding:10px; }
+        /* ✅ 캔버스 높이를 확실히 지정 */
+        #chart { width:100%; height:480px; display:block; }
+        .note { opacity:.7; font-size:12px; margin-top:8px; }
+    </style>
+</head>
+<body>
+<div class="top">
+    <strong>KRW FX</strong>
+    <select id="pair">
+        <option>USD-KRW</option><option>JPY-KRW</option>
+        <option>CNY-KRW</option><option>GBP-KRW</option><option>EUR-KRW</option>
+    </select>
+    <select id="tf">
+        <option value="5m">5m</option><option value="15m">15m</option>
+        <option value="30m">30m</option><option value="60m">1h</option>
+        <option value="1d" selected>1D</option><option value="1mo">1M</option><option value="1y">1Y</option>
+    </select>
+    <button id="reload">Reload</button>
+    <span id="src" class="note">—</span>
+</div>
+
+<div class="wrap">
+    <div id="chartWrap">
+        <canvas id="chart"></canvas>
+    </div>
+    <div class="note" id="status">ready</div>
+</div>
+
+<!-- Chart.js + time adapter -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+
+<!-- financial 플러그인 (정확한 버전/경로) -->
+<script type="module">
+    import {
+      CandlestickController, OhlcController,
+      CandlestickElement,   OhlcElement
+    } from 'https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.1/dist/chartjs-chart-financial.esm.js';
+    Chart.register(CandlestickController, OhlcController, CandlestickElement, OhlcElement);
+    window.__candlestickReady = !!Chart.registry.getController('candlestick');
+    console.log('[financial] registered =', window.__candlestickReady);
+</script>
+
+<script>
+    const $ = (id) => document.getElementById(id);
+    let timer = null;
+
+    async function fetchCandles(pair, tf){
+      const url = `/api/candles-av?pair=${encodeURIComponent(pair)}&tf=${tf}`;
+      const r = await fetch(url, { cache: 'no-store' });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    }
+
+    function toCandles(points){
+      // [{t,o,h,l,c}] -> [{x,o,h,l,c}]
+      return (points||[]).map(p => {
+        const x = new Date(p.t);
+        const o = Number(p.o), h=Number(p.h), l=Number(p.l), c=Number(p.c);
+        return { x, o, h, l, c };
+      }).filter(v =>
+        v.x instanceof Date && !isNaN(v.x) &&
+        [v.o,v.h,v.l,v.c].every(n=>Number.isFinite(n))
+      );
+    }
+
+    function yPadding(rows){
+      const ys = rows.flatMap(d => [d.h, d.l]);
+      const ymin = Math.min(...ys), ymax = Math.max(...ys);
+      const pad = (ymax - ymin) * 0.008;
+      return { min: Math.max(0, ymin - pad), max: ymax + pad };
+    }
+
+    function tfUnit(tf){
+      if (['5m','15m','30m','60m'].includes(tf)) return {unit:'minute', tip:'yyyy-MM-dd HH:mm'};
+      if (tf==='1mo') return {unit:'month', tip:'yyyy-MM'};
+      if (tf==='1y')  return {unit:'year',  tip:'yyyy'};
+      return {unit:'day', tip:'yyyy-MM-dd'};
+    }
+
+    function drawChart(rows, pair, tf, source){
+      const c = $('chart');
+      const prev = Chart.getChart(c);
+      if (prev) prev.destroy();
+
+      if (!rows.length){
+        $('status').textContent = '데이터 0건';
+        return;
+      }
+
+      const { min, max } = yPadding(rows);
+      const { unit, tip } = tfUnit(tf);
+
+      // ✅ candlestick 등록 여부에 따라 폴백
+      const canCandle = window.__candlestickReady === true;
+      const type = canCandle ? 'candlestick' : 'line';
+      const data = canCandle
+        ? { datasets: [{ label: pair, data: rows,
+              color:{up:'#54e897',down:'#ff6b6b',unchanged:'#9ca3af'},
+              borderColor:{up:'#54e897',down:'#ff6b6b',unchanged:'#9ca3af'}, borderWidth:1 }] }
+        : { labels: rows.map(r=>r.x), datasets:[{ label: pair, data: rows.map(r=>r.c), borderWidth:1.5, pointRadius:0 }] };
+
+      new Chart(c.getContext('2d'), {
+        type, data,
+        options: {
+          responsive:true, maintainAspectRatio:false, normalized:true, animation:false,
+          parsing:false,
+          scales:{
+            x:{ type:'time', time:{unit, tooltipFormat:tip}, ticks:{ maxTicksLimit:12 } },
+            y:{ min, max, ticks:{ callback:v=>Number(v).toLocaleString() } }
+          },
+          plugins:{
+            legend:{ display:false },
+            tooltip: canCandle ? {
+              callbacks:{ label:(ctx)=>{ const v=ctx.raw; return ` O ${v.o.toLocaleString()}  H ${v.h.toLocaleString()}  L ${v.l.toLocaleString()}  C ${v.c.toLocaleString()}`; } }
+            } : {}
+          }
+        }
+      });
+
+      $('src').textContent = source || '—';
+      $('status').textContent = `ok • ${new Date().toLocaleTimeString()} • mode=${type}`;
+    }
+
+    async function reload(){
+      clearTimeout(timer);
+      const pair = $('pair').value;
+      const tf = $('tf').value;
+      try{
+        const { points, source } = await fetchCandles(pair, tf);
+        console.log('[api] len=', points?.length, 'sample=', points?.[0]);
+        const rows = toCandles(points);
+        console.log('[rows] len=', rows.length, rows[0]);
+        drawChart(rows, pair, tf, source);
+      }catch(e){
+        console.error(e);
+        $('status').textContent = '에러: '+String(e).slice(0,140);
+      }finally{
+        timer = setTimeout(reload, 20000); // 20초 갱신
+      }
+    }
+
+    $('reload').addEventListener('click', reload);
+    $('pair').addEventListener('change', reload);
+    $('tf').addEventListener('change', reload);
+    window.addEventListener('load', reload);
+</script>
+</body>
+</html>
