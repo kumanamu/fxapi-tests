@@ -224,27 +224,14 @@
     }
 
     /* ---------- API (DB → TD → 기타 폴백) ---------- */
-    async function fetchCandles(pair, tf, limit=240){
-      const urls = [
-        `/api/candles-db?pair=${encodeURIComponent(pair)}&tf=${tf}&limit=${limit}`,
-        `/api/candles-db-resampled?pair=${encodeURIComponent(pair)}&fromTf=1m&toTf=${tf}&take=${limit*5}`,
-        `/api/td-candles?pair=${encodeURIComponent(pair)}&tf=${tf}&limit=${limit}`,
-        `/api/candles-av?pair=${encodeURIComponent(pair)}&tf=${tf}&limit=${limit}`,
-        `/api/candles?pair=${encodeURIComponent(pair)}&tf=${tf}&limit=${limit}`,
-        `/api/series?pair=${encodeURIComponent(pair)}&tf=${tf}`
-      ];
-      let lastErr = 'no endpoint';
-      for (const url of urls){
-        try{
-          setText('#dbgUrl', url);
-          const r = await fetch(url, { cache:'no-store' });
-          setText('#dbgHttp', `${r.status} ${r.statusText}`);
-          if (r.ok) return r.json();
-          lastErr = await r.text();
-        }catch(e){ lastErr = String(e); }
-      }
-      throw new Error(lastErr);
-    }
+ async function fetchCandles(pair, tf, limit=240){
+  const url = `/api/td-candles?pair=${encodeURIComponent(pair)}&tf=${tf}&limit=${limit}`;
+  setText('#dbgUrl', url);
+  const r = await fetch(url, { cache:'no-store' });
+  setText('#dbgHttp', `${r.status} ${r.statusText}`);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
 
     async function reload(){
       clearTimeout(timer);

@@ -1,4 +1,3 @@
-// com/fxapp/config/TwelveProps.java
 package com.fxapp.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
