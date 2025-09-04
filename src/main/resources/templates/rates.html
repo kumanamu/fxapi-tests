@@ -26,7 +26,7 @@
         @media (max-width:900px){.wrap{grid-template-columns:1fr}}
     </style>
 
-    <!-- Lightweight Charts 폴백 로더(standalone UMD만 사용) -->
+    <!-- Lightweight Charts 폴백 로더 -->
     <script>
         (function () {
           const cdn = (v, f) => `https://cdn.jsdelivr.net/npm/lightweight-charts@${v}/dist/${f}`;
@@ -94,11 +94,13 @@
 
     <main class="chart-card">
         <div id="chart-area">
-            <!-- 차트 내부 타임프레임 -->
             <div class="tf-inside" id="tf-inside">
+                <button class="tf-btn" data-tf="1s">1초</button>
                 <button class="tf-btn active" data-tf="1m">1분</button>
                 <button class="tf-btn" data-tf="15m">15분</button>
+                <button class="tf-btn" data-tf="30m">30분</button>
                 <button class="tf-btn" data-tf="1h">1시간</button>
+                <button class="tf-btn" data-tf="4h">4시간</button>
                 <button class="tf-btn" data-tf="1d">1일</button>
                 <button class="tf-btn" data-tf="1w">1주</button>
                 <button class="tf-btn" data-tf="1M">1개월</button>
@@ -112,49 +114,187 @@
     let chart, candleSeries, resizeObs, pseudoTimer=null;
     const $ = (id) => document.getElementById(id);
 
-    // 페어별 기준 단위 설정
+    // 페어별 기준 단위
     const PAIR_CFG = {
-      'USD/KRW': { title:'원달러환율', basis:1,   basisLabel:'1 USD'  },
-      'JPY/KRW': { title:'원엔화환율', basis:100, basisLabel:'100 JPY' },
-      'CNY/KRW': { title:'원위안환율', basis:100, basisLabel:'100 CNY' },
-      'EUR/KRW': { title:'원유로환율', basis:1,   basisLabel:'1 EUR'  },
-      'GBP/KRW': { title:'원파운드환율', basis:1, basisLabel:'1 GBP'  },
+      'USD/KRW': { title:'원달러환율',  basis:1,   basisLabel:'1 USD',  seed:1350 },
+      'JPY/KRW': { title:'원엔화환율',  basis:100, basisLabel:'100 JPY', seed:900  },
+      'CNY/KRW': { title:'원위안환율',  basis:100, basisLabel:'100 CNY', seed:19000},
+      'EUR/KRW': { title:'원유로환율',  basis:1,   basisLabel:'1 EUR',  seed:1450 },
+      'GBP/KRW': { title:'원파운드환율', basis:1,   basisLabel:'1 GBP',  seed:1750 },
     };
 
-    // 타임프레임별 자동 캔들 수(대략적인 히스토리 길이)
+    // 자동 limit
     const AUTO_LIMIT = (tf) => ({
-      '1m':1440,'15m':1200,'1h':900,'4h':800,'1d':1000,'1w':800,'1M':600
+      '1s': 900,
+      '1m': 720,
+      '15m':800,
+      '30m':800,
+      '1h': 900,
+      '4h': 800,
+      '1d': 1000,
+      '1w': 800,
+      '1M': 600
     }[tf] ?? 900);
 
-    function precisionFor(v){
-      if (!isFinite(v)||v===0) return 2;
-      const a=Math.abs(v);
-      if(a>=10000) return 0;
-      if(a>=1000)  return 1;
-      if(a>=100)   return 1;
-      if(a>=10)    return 2;
-      if(a>=1)     return 3;
-      if(a>=0.1)   return 4;
-      return 6;
-    }
-    const minMoveFor = (p)=>Math.pow(10,-p);
-    function fmt(n,p){ try{ return Number(n).toLocaleString(undefined,{minimumFractionDigits:p,maximumFractionDigits:p}); }catch{ return String(n); } }
+    // ===== 포맷/시간 =====
+    const PRICE_PREC = 2;
+    const minMoveFor = (p)=> Math.pow(10,-p);
+    const fmt2 = (n)=> {
+      try { return Number(n).toLocaleString(undefined,{minimumFractionDigits:PRICE_PREC,maximumFractionDigits:PRICE_PREC}); }
+      catch { return String(n); }
+    };
 
+    const KST_OFFSET = 9*3600; // seconds
+    const toKstSec = (utcSec)=> utcSec + KST_OFFSET;
+    const toUtcSec = (kstSec)=> kstSec - KST_OFFSET;
+
+    function tickMarkKSTFormatterFactory(currentTf) {
+      return (time) => {
+        const d = new Date((time + KST_OFFSET) * 1000);
+        const y = d.getUTCFullYear();
+        const M = String(d.getUTCMonth()+1).padStart(2,'0');
+        const D = String(d.getUTCDate()).padStart(2,'0');
+        const h = String(d.getUTCHours()).padStart(2,'0');
+        const m = String(d.getUTCMinutes()).padStart(2,'0');
+        const s = String(d.getUTCSeconds()).padStart(2,'0');
+        if (currentTf === '1s') return `${h}:${m}:${s}`;
+        if (currentTf === '1m' || currentTf === '15m' || currentTf === '30m' || currentTf === '1h' || currentTf==='4h') return `${M}/${D} ${h}:${m}`;
+        if (currentTf === '1w' || currentTf === '1M') return `${y}-${M}-${D}`;
+        return `${y}-${M}-${D}`;
+      };
+    }
+
+    const TF_UNIT_SEC = (tf) => ({
+      '1s':1, '1m':60, '15m':900, '30m':1800, '1h':3600, '4h':14400
+    }[tf] ?? null);
+
+    function floorToTfStartKst(kstSec, tf) {
+      const unit = TF_UNIT_SEC(tf);
+      if (unit) return kstSec - (kstSec % unit);
+
+      const dayStart = kstSec - (kstSec % 86400);
+      if (tf === '1d') return dayStart;
+
+      if (tf === '1w') {
+        const dow = new Date((toUtcSec(kstSec))*1000).getUTCDay(); // 0=일..6=토
+        const daysFromMon = (dow + 6) % 7; // 월=0
+        return dayStart - daysFromMon*86400;
+      }
+
+      if (tf === '1M') {
+        const k = new Date((toUtcSec(kstSec))*1000);
+        const y = k.getUTCFullYear();
+        const m = k.getUTCMonth();
+        const firstOfMonthKst = Date.UTC(y, m, 1, 0,0,0) + KST_OFFSET*1000;
+        return Math.floor(firstOfMonthKst/1000);
+      }
+      return kstSec;
+    }
+
+    function nextTfStartKst(fromKstStart, tf) {
+      const unit = TF_UNIT_SEC(tf);
+      if (unit) return fromKstStart + unit;
+
+      if (tf === '1d') return fromKstStart + 86400;
+      if (tf === '1w') return fromKstStart + 7*86400;
+      if (tf === '1M') {
+        const k = new Date((toUtcSec(fromKstStart))*1000);
+        const y = k.getUTCFullYear();
+        const m = k.getUTCMonth();
+        const next = Date.UTC(m===11?y+1:y, (m+1)%12, 1, 0,0,0) + KST_OFFSET*1000;
+        return Math.floor(next/1000);
+      }
+      return fromKstStart;
+    }
+
+    // ===== 백엔드 tf 매핑 & 재시도 =====
+    const TF_BACKEND = {
+      '1s': ['1m'],                 // 1초봉 → 1분 시드
+      '1m': ['1m','60'],
+      '15m':['15m'],
+      '30m':['30m'],
+      '1h': ['1h','60m'],
+      '4h': ['4h','240m'],
+      '1d': ['1day','1d','D','day'],
+      '1w': ['1week','1w','W','week'],
+      '1M': ['1month','1M','M','month'],
+    };
+
+    async function fetchCandlesFromBackend(apiPair, tf, limit) {
+      const tried = [];
+      const limitPlan = [Math.min(limit, 900), 480, 240, 120].filter((v,i,a)=>v>0 && a.indexOf(v)===i);
+      const tfCandidates = TF_BACKEND[tf] ?? [tf];
+
+      let lastErr = null;
+      for (const lc of limitPlan) {
+        for (const t of tfCandidates) {
+          tried.push(`${t}/${lc}`);
+          try {
+            const url = `/api/td-candles?pair=${encodeURIComponent(apiPair)}&tf=${encodeURIComponent(t)}&limit=${lc}`;
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const body = await res.json();
+            const vals = Array.isArray(body?.values) ? body.values : [];
+            if (vals.length) return vals;
+            lastErr = new Error('empty');
+          } catch (e) {
+            lastErr = e;
+          }
+        }
+      }
+      const statusEl = $('status');
+      if (statusEl) statusEl.textContent = `백엔드 오류(가상 시드로 전환): ${lastErr?.message||'fetch fail'}\n시도: ${tried.join(', ')}`;
+      throw lastErr || new Error('fetch failed');
+    }
+
+    // ===== 파싱/스케일 =====
     function parseCandles(values){
       return values.map(it=>{
         const t=(it.datetime||it.date||it.time);
-        return { time: Math.floor(new Date((t&&t.endsWith('Z'))?t:(t+'Z')).getTime()/1000),
-                 open:+it.open, high:+it.high, low:+it.low, close:+it.close };
+        const utcSec = Math.floor(new Date((t && t.endsWith('Z')) ? t : (t+'Z')).getTime()/1000);
+        return { time: utcSec, open:+it.open, high:+it.high, low:+it.low, close:+it.close };
       });
     }
-    // 기준 단위(1 또는 100)로 스케일
+
     function applyBasis(cs, units){
       if(units===1) return cs;
       return cs.map(c=>({ time:c.time,
         open:c.open*units, high:c.high*units, low:c.low*units, close:c.close*units }));
     }
 
-    function ensureChart(){
+    // ===== 가상 시드 히스토리 생성(백엔드 실패 대비) =====
+    function volatilityFor(tf){
+      return ({
+        '1s': 0.00020, '1m':0.00015, '15m':0.00025, '30m':0.00030,
+        '1h': 0.00040, '4h':0.00060, '1d':0.00120, '1w':0.00200, '1M':0.00350
+      }[tf] ?? 0.0003);
+    }
+
+    function buildSyntheticHistory(startPrice, tf, bars){
+      const out = [];
+      const nowKst = Math.floor(Date.now()/1000) + KST_OFFSET;
+      const endKst = floorToTfStartKst(nowKst, tf); // 현재 진행중 봉의 시작
+      const unit = TF_UNIT_SEC(tf) || (tf==='1d'?86400:(tf==='1w'?7*86400:(tf==='1M'?2629800:60)));
+
+      const sigma = Math.max(startPrice * volatilityFor(tf), 0.01);
+      // 과거로 bars-1개 생성
+      let close = startPrice;
+      for (let i=bars-1; i>=0; i--){
+        const tKst = endKst - i*unit;
+        const tUtc = toUtcSec(tKst);
+        const open = close;
+        // 이전 변동에서 약간씩 노이즈
+        const step = (Math.random()*2-1)*sigma;
+        close = Math.max(0.01, open + step);
+        const high = Math.max(open, close) + Math.random()*sigma*0.5;
+        const low  = Math.min(open, close) - Math.random()*sigma*0.5;
+        out.push({ time:tUtc, open, high, low, close });
+      }
+      return out;
+    }
+
+    // ===== 차트 보일러플레이트 =====
+    function ensureChart(currentTf){
       const L=window.LightweightCharts, statusEl=$('status');
       if(!L?.createChart){ statusEl.textContent='LightweightCharts 로드 실패'; return false; }
       if(!chart){
@@ -162,9 +302,24 @@
         chart=L.createChart(cont,{
           layout:{ textColor:'#D1D5DB', background:{ type:'solid', color:'#0B1221' } },
           grid:{ vertLines:{ color:'rgba(255,255,255,0.06)' }, horzLines:{ color:'rgba(255,255,255,0.06)' } },
-          timeScale:{ timeVisible:true, borderVisible:false },
+          timeScale:{
+            timeVisible:true,
+            secondsVisible: currentTf === '1s',
+            borderVisible:false,
+            tickMarkFormatter: tickMarkKSTFormatterFactory(currentTf),
+          },
           rightPriceScale:{ borderVisible:false },
-          crosshair:{ mode:0 }
+          crosshair:{ mode:0 },
+          localization: { locale: 'ko-KR' },
+        });
+      } else {
+        chart.applyOptions({
+          timeScale:{
+            timeVisible:true,
+            secondsVisible: currentTf === '1s',
+            borderVisible:false,
+            tickMarkFormatter: tickMarkKSTFormatterFactory(currentTf),
+          },
         });
       }
       if(!candleSeries){
@@ -172,8 +327,10 @@
           upColor:'#10B981', downColor:'#EF4444',
           borderUpColor:'#10B981', borderDownColor:'#EF4444',
           wickUpColor:'#10B981', wickDownColor:'#EF4444',
-          priceFormat:{ type:'price', precision:1, minMove:minMoveFor(1) }
+          priceFormat:{ type:'price', precision:PRICE_PREC, minMove:minMoveFor(PRICE_PREC) }
         });
+      } else {
+        candleSeries.applyOptions({ priceFormat:{ type:'price', precision:PRICE_PREC, minMove:minMoveFor(PRICE_PREC) } });
       }
       if(!resizeObs){
         const cont=$('chart-area');
@@ -183,68 +340,68 @@
       return true;
     }
 
-    async function fetchCandles(apiPair, tf, limit){
-      const url=`/api/td-candles?pair=${encodeURIComponent(apiPair)}&tf=${encodeURIComponent(tf)}&limit=${limit}`;
-      const res=await fetch(url);
-      if(!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body=await res.json();
-      return Array.isArray(body?.values)?body.values:[];
-    }
-
     function stopPseudoLive(){ if(pseudoTimer){ clearInterval(pseudoTimer); pseudoTimer=null; } }
 
-    function tfNextTimeSec(lastTimeSec, tf){
-      if(tf==='1M'){
-        const d=new Date(lastTimeSec*1000);
-        const y=d.getUTCFullYear(), m=d.getUTCMonth();
-        const next=Date.UTC(m===11?y+1:y,(m+1)%12,1,0,0,0);
-        return Math.floor(next/1000);
-      }
-      const dur=({'1m':60,'15m':900,'30m':1800,'1h':3600,'4h':14400,'1d':86400,'1w':604800}[tf] ?? 3600);
-      return lastTimeSec+dur;
-    }
-
+    // ===== 가짜 라이브 엔진 =====
     function startPseudoLive(seedData, pair, tf){
       stopPseudoLive();
       if(!seedData?.length || !candleSeries) return;
 
-      const { basisLabel } = PAIR_CFG[pair] || { basisLabel:'기준' };
-      let bar={ ...seedData[seedData.length-1] };
-      let lastClose=bar.close;
+      const vol = volatilityFor(tf);
+      const tickMs = (tf==='1s') ? 250 : 1000;
+      const cfg = PAIR_CFG[pair] || { basisLabel:'기준' };
 
-      const baseRange=Math.max(bar.high-bar.low, Math.abs(bar.close-bar.open));
-      const sigma = tf==='1m'
-        ? (baseRange>0? baseRange/120 : Math.max(lastClose*0.0003, 1e-9))
-        : (baseRange>0? baseRange/80  : Math.max(lastClose*0.0005, 1e-9));
+      const nowKst = Math.floor(Date.now()/1000) + KST_OFFSET;
+      let curStartKst = floorToTfStartKst(nowKst, tf);
+      let curStartUtc = toUtcSec(curStartKst);
 
-      const tickMs = tf==='1m'? 500 : 1000;
+      const lastSeed = seedData[seedData.length-1];
+      if (lastSeed.time < curStartUtc) {
+        const open = lastSeed.close;
+        candleSeries.update({ time:curStartUtc, open, high:open, low:open, close:open });
+      } else if (lastSeed.time > curStartUtc) {
+        curStartUtc = lastSeed.time;
+        curStartKst = toKstSec(curStartUtc);
+      }
 
-      pseudoTimer=setInterval(()=>{
+      let bar = { ...seedData[seedData.length-1] };
+      if (bar.time < curStartUtc) {
+        const o = seedData[seedData.length-1].close;
+        bar = { time: curStartUtc, open:o, high:o, low:o, close:o };
+      }
+      let lastClose = bar.close;
+
+      pseudoTimer=setInterval(()=> {
         try{
-          const nowSec=Math.floor(Date.now()/1000);
-          const nextT=tfNextTimeSec(bar.time, tf);
+          let nowK = Math.floor(Date.now()/1000) + KST_OFFSET;
+          let nextK = nextTfStartKst(curStartKst, tf);
 
-          if(nowSec>=nextT){
-            const open=lastClose;
-            bar={ time:nextT, open, high:open, low:open, close:open };
+          let loopGuard = 0;
+          while (nowK >= nextK && loopGuard++ < 10) {
+            const open = lastClose;
+            curStartKst = nextK;
+            curStartUtc = toUtcSec(curStartKst);
+            bar = { time: curStartUtc, open, high: open, low: open, close: open };
             candleSeries.update(bar);
-          }else{
-            const step=(Math.random()*2-1)*sigma;
-            const close=lastClose+step;
-            const high=Math.max(bar.high,close);
-            const low =Math.min(bar.low, close);
-            bar={ ...bar, close, high, low };
-            candleSeries.update(bar);
-            lastClose=close;
+            nextK = nextTfStartKst(curStartKst, tf);
           }
 
-          const prec=precisionFor(bar.close);
-          $('last-quote').textContent=`${basisLabel} ≈ ${fmt(bar.close, prec)} KRW`;
-          $('status').textContent=`완료: ${pair} • ${tf} •  실시간 표시 중`;
+          const sigma = Math.max(lastClose * vol, 0.01);
+          const step = (Math.random()*2 - 1) * sigma;
+          const close = Math.max(0.01, lastClose + step);
+          const high  = Math.max(bar.high, close);
+          const low   = Math.min(bar.low,  close);
+          bar = { ...bar, close, high, low };
+          candleSeries.update(bar);
+          lastClose = close;
+
+          $('last-quote').textContent = `${cfg.basisLabel} ≈ ${fmt2(bar.close)} KRW`;
+          $('status').textContent = `실시간 표시(가상): ${pair} • ${tf}`;
         }catch{}
       }, tickMs);
     }
 
+    // ===== 로드 & 전환 =====
     async function loadChart(pair, tf){
       const statusEl=$('status'), lastEl=$('last-quote'), labelEl=$('pair-label');
       const cfg=PAIR_CFG[pair]; if(!cfg){ statusEl.textContent='지원하지 않는 통화'; return; }
@@ -252,26 +409,32 @@
       labelEl.textContent=`${cfg.title} (${pair})`;
       statusEl.textContent='불러오는 중…'; lastEl.textContent='';
 
-      if(!ensureChart()) return;
-      chart.applyOptions({ timeScale:{ secondsVisible: tf==='1m', timeVisible:true, borderVisible:false } });
-
+      if(!ensureChart(tf)) return;
       stopPseudoLive();
 
-      const raw=await fetchCandles(pair, tf, AUTO_LIMIT(tf));
-      if(raw.length===0){ statusEl.textContent='데이터 없음'; return; }
+      const limit = AUTO_LIMIT(tf);
 
-      const base=parseCandles(raw);
-      const data=applyBasis(base, cfg.basis); // 엔/위안은 ×100
+      let data;
+      try {
+        const raw = await fetchCandlesFromBackend(pair, tf, limit);
+        const base = parseCandles(raw);           // UTC
+        data = applyBasis(base, cfg.basis);       // 엔/위안 ×100
+        if (!data.length) throw new Error('empty');
+      } catch (e) {
+        // === 백엔드 실패 → 가상 시드로 전환 ===
+        const seedStart = cfg.seed || 1000;
+        data = buildSyntheticHistory(seedStart, tf, Math.max(60, Math.min(limit, 600)));
+        statusEl.textContent = `백엔드 오류 → 가상 데이터로 전환 (${e?.message||'unknown'})`;
+      }
 
-      const last=data[data.length-1].close;
-      const prec=precisionFor(last);
-
-      candleSeries.applyOptions({ priceFormat:{ type:'price', precision:prec, minMove:minMoveFor(prec) } });
       candleSeries.setData(data);
       chart.timeScale().fitContent();
 
-      $('last-quote').textContent=`${cfg.basisLabel} ≈ ${fmt(last, prec)} KRW`;
-      statusEl.textContent=`완료: ${pair} • ${tf} • ${data.length}개`;
+      const last=data[data.length-1].close;
+      $('last-quote').textContent=`${cfg.basisLabel} ≈ ${fmt2(last)} KRW`;
+      if (!statusEl.textContent.startsWith('백엔드 오류')) {
+        statusEl.textContent=`완료: ${pair} • ${tf} • ${data.length}개`;
+      }
 
       startPseudoLive(data, pair, tf);
     }
@@ -291,11 +454,13 @@
       catch(e){ $('status').textContent='차트 라이브러리를 불러오지 못했습니다.\n→ 네트워크 또는 CDN 404'; console.error(e); return; }
 
       const State={ pair: pairEl.value, tf: (tfWrap.querySelector('.tf-btn.active')?.dataset.tf)||'1m' };
+      tfWrap.querySelectorAll('.tf-btn').forEach(b=> b.classList.toggle('active', b.dataset.tf===State.tf));
 
       await loadChart(State.pair, State.tf).catch(err=>{ $('status').textContent=`에러: ${err.message}`; console.error(err); });
 
       tfWrap.addEventListener('click', async (e)=>{
         const btn=e.target.closest('button[data-tf]'); if(!btn) return;
+        if(btn.classList.contains('active')) return;
         tfWrap.querySelectorAll('.tf-btn').forEach(b=>b.classList.remove('active'));
         btn.classList.add('active');
         State.tf=btn.dataset.tf;
