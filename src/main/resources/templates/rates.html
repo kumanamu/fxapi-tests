@@ -1,18 +1,23 @@
 <!doctype html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>KRW FX Chart</title>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <title>KRW FX • Candles (Twelve Data, 70s)</title>
     <style>
         :root { color-scheme: dark; }
         body { margin:0; background:#0f1520; color:#e6e8eb; font-family:ui-sans-serif,-apple-system,Segoe UI,Roboto,Arial; }
         .top { display:flex; gap:10px; align-items:center; padding:10px 14px; background:#0b101a; border-bottom:1px solid #1d2430; }
-        .wrap { padding:16px; }
-        #chartWrap { background:#0b101a; border:1px solid #1d2430; border-radius:10px; padding:10px; }
-        /* ✅ 캔버스 높이를 확실히 지정 */
-        #chart { width:100%; height:480px; display:block; }
-        .note { opacity:.7; font-size:12px; margin-top:8px; }
+        .top .spacer{ flex:1 }
+        .hud { display:flex; gap:10px; align-items:center; font-size:14px; }
+        .hud .lab{ opacity:.7 }
+        .wrap { padding:14px; display:grid; gap:10px; }
+        .panel { background:#0b101a; border:1px solid #1d2430; border-radius:12px; padding:10px; }
+        #tv { width:100%; height:540px; }
+        select,button{ background:#141a26; color:#e6e8eb; border:1px solid #222a39; border-radius:8px; padding:6px 10px; }
+        .tag { padding:3px 8px; border-radius:999px; border:1px solid #2a3750; background:#121a28; font-size:12px; }
+        .note{ opacity:.8; font-size:12px; }
+        .debug{ font-family:ui-monospace,Menlo,Consolas,monospace; line-height:1.35; }
     </style>
 </head>
 <body>
@@ -23,133 +28,158 @@
         <option>CNY-KRW</option><option>GBP-KRW</option><option>EUR-KRW</option>
     </select>
     <select id="tf">
+        <option value="1m">1m</option>
         <option value="5m">5m</option><option value="15m">15m</option>
-        <option value="30m">30m</option><option value="60m">1h</option>
-        <option value="1d" selected>1D</option><option value="1mo">1M</option><option value="1y">1Y</option>
+        <option value="30m" selected>30m</option><option value="60m">1h</option>
+        <option value="1d">1D</option><option value="1mo">1M</option><option value="1y">1Y</option>
     </select>
     <button id="reload">Reload</button>
-    <span id="src" class="note">—</span>
+    <span id="src" class="tag">—</span>
+    <div class="spacer"></div>
+    <!-- HUD -->
+    <div class="hud" id="hud">
+        <span class="lab">현재가</span><strong id="pLast">—</strong>
+        <span class="lab">O</span><span id="pO">—</span>
+        <span class="lab">H</span><span id="pH">—</span>
+        <span class="lab">L</span><span id="pL">—</span>
+        <span class="lab">C</span><span id="pC">—</span>
+    </div>
 </div>
 
 <div class="wrap">
-    <div id="chartWrap">
-        <canvas id="chart"></canvas>
+    <div class="panel"><div id="tv"></div></div>
+    <div class="panel note debug">
+        <div id="status">ready…</div>
+        <div>url: <span id="dbgUrl">—</span></div>
+        <div>http: <span id="dbgHttp">—</span> • bars: <span id="dbgLen">—</span></div>
     </div>
-    <div class="note" id="status">ready</div>
 </div>
 
-<!-- Chart.js + time adapter -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
-
-<!-- financial 플러그인 (정확한 버전/경로) -->
-<script type="module">
-    import {
-      CandlestickController, OhlcController,
-      CandlestickElement,   OhlcElement
-    } from 'https://cdn.jsdelivr.net/npm/chartjs-chart-financial@0.2.1/dist/chartjs-chart-financial.esm.js';
-    Chart.register(CandlestickController, OhlcController, CandlestickElement, OhlcElement);
-    window.__candlestickReady = !!Chart.registry.getController('candlestick');
-    console.log('[financial] registered =', window.__candlestickReady);
-</script>
+<!-- TradingView lightweight-charts -->
+<script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
 
 <script>
-    const $ = (id) => document.getElementById(id);
-    let timer = null;
+    const $ = id => document.getElementById(id);
+    const setNum = (id, v) => { const el=$(id); if (el) el.textContent = Number.isFinite(v) ? Number(v).toLocaleString() : String(v); };
+    const setText= (id, v) => { const el=$(id); if (el) el.textContent = String(v); };
 
-    async function fetchCandles(pair, tf){
-      const url = `/api/candles-av?pair=${encodeURIComponent(pair)}&tf=${tf}`;
-      const r = await fetch(url, { cache: 'no-store' });
-      if (!r.ok) throw new Error(await r.text());
-      return r.json();
-    }
+    // ✅ 70초 고정 주기
+    const REFRESH_MS = 70_000;
+    const RATE_LIMIT_COOLDOWN = 70_000; // 429 쿨다운도 70초
 
-    function toCandles(points){
-      // [{t,o,h,l,c}] -> [{x,o,h,l,c}]
-      return (points||[]).map(p => {
-        const x = new Date(p.t);
-        const o = Number(p.o), h=Number(p.h), l=Number(p.l), c=Number(p.c);
-        return { x, o, h, l, c };
-      }).filter(v =>
-        v.x instanceof Date && !isNaN(v.x) &&
-        [v.o,v.h,v.l,v.c].every(n=>Number.isFinite(n))
-      );
-    }
+    let chart, candle, timer, lastBar;
 
-    function yPadding(rows){
-      const ys = rows.flatMap(d => [d.h, d.l]);
-      const ymin = Math.min(...ys), ymax = Math.max(...ys);
-      const pad = (ymax - ymin) * 0.008;
-      return { min: Math.max(0, ymin - pad), max: ymax + pad };
-    }
+    function ensureChart(){
+      if (chart) return;
+      chart = LightweightCharts.createChart($('tv'), {
+        layout:{ background:{ color:'#0f1520' }, textColor:'#e6e8eb' },
+        grid:{ vertLines:{ color:'rgba(255,255,255,.06)' }, horzLines:{ color:'rgba(255,255,255,.06)' } },
+        rightPriceScale:{ borderVisible:false },
+        timeScale:{ borderVisible:false, secondsVisible:false },
+        crosshair:{ mode: LightweightCharts.CrosshairMode.Normal },
+        localization:{ priceFormatter: p => Number(p).toLocaleString() },
+      });
+      candle = chart.addCandlestickSeries({
+        upColor:'#22d3ee', downColor:'#f87171',
+        wickUpColor:'#22d3ee', wickDownColor:'#f87171',
+        borderVisible:false
+      });
+      const ro = new ResizeObserver(()=>chart.applyOptions({ width:$('tv').clientWidth, height:$('tv').clientHeight }));
+      ro.observe($('tv'));
+      chart.applyOptions({ width:$('tv').clientWidth, height:$('tv').clientHeight });
 
-    function tfUnit(tf){
-      if (['5m','15m','30m','60m'].includes(tf)) return {unit:'minute', tip:'yyyy-MM-dd HH:mm'};
-      if (tf==='1mo') return {unit:'month', tip:'yyyy-MM'};
-      if (tf==='1y')  return {unit:'year',  tip:'yyyy'};
-      return {unit:'day', tip:'yyyy-MM-dd'};
-    }
-
-    function drawChart(rows, pair, tf, source){
-      const c = $('chart');
-      const prev = Chart.getChart(c);
-      if (prev) prev.destroy();
-
-      if (!rows.length){
-        $('status').textContent = '데이터 0건';
-        return;
-      }
-
-      const { min, max } = yPadding(rows);
-      const { unit, tip } = tfUnit(tf);
-
-      // ✅ candlestick 등록 여부에 따라 폴백
-      const canCandle = window.__candlestickReady === true;
-      const type = canCandle ? 'candlestick' : 'line';
-      const data = canCandle
-        ? { datasets: [{ label: pair, data: rows,
-              color:{up:'#54e897',down:'#ff6b6b',unchanged:'#9ca3af'},
-              borderColor:{up:'#54e897',down:'#ff6b6b',unchanged:'#9ca3af'}, borderWidth:1 }] }
-        : { labels: rows.map(r=>r.x), datasets:[{ label: pair, data: rows.map(r=>r.c), borderWidth:1.5, pointRadius:0 }] };
-
-      new Chart(c.getContext('2d'), {
-        type, data,
-        options: {
-          responsive:true, maintainAspectRatio:false, normalized:true, animation:false,
-          parsing:false,
-          scales:{
-            x:{ type:'time', time:{unit, tooltipFormat:tip}, ticks:{ maxTicksLimit:12 } },
-            y:{ min, max, ticks:{ callback:v=>Number(v).toLocaleString() } }
-          },
-          plugins:{
-            legend:{ display:false },
-            tooltip: canCandle ? {
-              callbacks:{ label:(ctx)=>{ const v=ctx.raw; return ` O ${v.o.toLocaleString()}  H ${v.h.toLocaleString()}  L ${v.l.toLocaleString()}  C ${v.c.toLocaleString()}`; } }
-            } : {}
-          }
+      chart.subscribeCrosshairMove(param=>{
+        const v = param.seriesData.get(candle);
+        if (v && v.open!==undefined) {
+          setNum('pLast', v.close); setNum('pO', v.open); setNum('pH', v.high); setNum('pL', v.low); setNum('pC', v.close);
+        } else if (lastBar) {
+          setNum('pLast', lastBar.close); setNum('pO', lastBar.open); setNum('pH', lastBar.high); setNum('pL', lastBar.low); setNum('pC', lastBar.close);
         }
       });
+    }
 
-      $('src').textContent = source || '—';
-      $('status').textContent = `ok • ${new Date().toLocaleTimeString()} • mode=${type}`;
+    function normalize(points){
+      const arr = Array.isArray(points) ? points.slice() : [];
+      arr.forEach(p => p._ts = new Date(p.t).getTime());
+      arr.sort((a,b)=>a._ts-b._ts);
+      const seen=new Set(), out=[];
+      for(const p of arr){ if(!seen.has(p._ts)){ out.push(p); seen.add(p._ts);} }
+      return out;
+    }
+    const isIntraday = tf => ['1m','5m','15m','30m','60m'].includes(tf);
+    const toTime = (t, tf) => {
+      const d = new Date(t);
+      if (isIntraday(tf)) return Math.floor(d.getTime()/1000);
+      return { year:d.getUTCFullYear(), month:d.getUTCMonth()+1, day:d.getUTCDate() };
+    };
+
+    function toCandles(points, tf){
+      const rows = normalize(points);
+      if (!rows.length) return [];
+      return rows.map(p=>({ time:toTime(p.t,tf), open:+p.o, high:+p.h, low:+p.l, close:+p.c }))
+                 .filter(b=>[b.open,b.high,b.low,b.close].every(Number.isFinite));
+    }
+
+    async function fetchCandles(pair, tf, limit=240){
+      const url = `/api/candles-td?pair=${encodeURIComponent(pair)}&tf=${tf}&limit=${limit}`;
+      setText('dbgUrl', url);
+      try{
+        const r = await fetch(url, { cache:'no-store' });
+        setText('dbgHttp', `${r.status} ${r.statusText}`);
+        const data = await r.json().catch(()=>({}));
+        return { ok:r.ok, status:r.status, data };
+      }catch(e){
+        setText('dbgHttp', `fetch error`);
+        return { ok:false, status:0, data:null };
+      }
+    }
+    async function fetchQuote(pair){
+      const url = `/api/quote-td?pair=${encodeURIComponent(pair)}`;
+      try{
+        const r = await fetch(url, { cache:'no-store' });
+        if (!r.ok) return null;
+        return await r.json();
+      }catch{ return null; }
+    }
+
+    function draw(bars, pair, tf, source){
+      ensureChart();
+      candle.setData(bars);
+      setText('src', source || '—');
+      setText('dbgLen', bars.length);
+      setText('status', `ok • ${new Date().toLocaleTimeString()} • ${pair} ${tf} • bars=${bars.length}`);
+      const last = bars[bars.length-1];
+      if (last){
+        lastBar = last;
+        setNum('pLast', last.close);
+        setNum('pO', last.open); setNum('pH', last.high); setNum('pL', last.low); setNum('pC', last.close);
+      }
     }
 
     async function reload(){
       clearTimeout(timer);
-      const pair = $('pair').value;
-      const tf = $('tf').value;
-      try{
-        const { points, source } = await fetchCandles(pair, tf);
-        console.log('[api] len=', points?.length, 'sample=', points?.[0]);
-        const rows = toCandles(points);
-        console.log('[rows] len=', rows.length, rows[0]);
-        drawChart(rows, pair, tf, source);
-      }catch(e){
-        console.error(e);
-        $('status').textContent = '에러: '+String(e).slice(0,140);
-      }finally{
-        timer = setTimeout(reload, 20000); // 20초 갱신
+      const pair = $('pair')?.value ?? 'USD-KRW';
+      const tf   = $('tf')?.value   ?? '30m';
+      const res = await fetchCandles(pair, tf, tf==='1y'?365:240);
+
+      if (res.ok && res?.data?.points) {
+        const bars = toCandles(res.data.points, tf);
+        draw(bars, pair, tf, res.data.source);
+        // 현재가 보정: quote가 있으면 HUD 업데이트
+        const q = await fetchQuote(pair);
+        if (q && Number.isFinite(q.last)) setNum('pLast', q.last);
+        timer = setTimeout(reload, REFRESH_MS);       // ✅ 70초
+        return;
       }
+
+      if (res.status === 429) {
+        setText('status', '요청 제한(429): 무료 키 호출 한도 초과. 70초 후 자동 재시도합니다.');
+        timer = setTimeout(reload, RATE_LIMIT_COOLDOWN); // ✅ 70초
+        return;
+      }
+
+      setText('status', '에러: ' + (res.status || 'network'));
+      timer = setTimeout(reload, REFRESH_MS);           // ✅ 70초
     }
 
     $('reload').addEventListener('click', reload);

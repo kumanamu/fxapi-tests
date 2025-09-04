@@ -35,7 +35,7 @@ public class ApiSeriesController {
     @Value("${app.exh.access-key:}")
     String accessKey;
 
-    public ApiSeriesController(@Qualifier("exhClient") WebClient exh) {
+    public ApiSeriesController(@Qualifier("twelveClient") WebClient exh) {
         this.exh = exh;
     }
 
