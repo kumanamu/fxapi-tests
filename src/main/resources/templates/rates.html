@@ -1,264 +1,290 @@
 <!doctype html>
-<html lang="ko">
+<html lang="ko" xmlns:th="http://www.thymeleaf.org">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>KRW FX • Candles</title>
+    <meta charset="utf-8" />
+    <title>환율 캔들 차트 (rates)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
     <style>
-        :root { color-scheme: dark; }
-        body { margin:0; background:#0f1520; color:#e6e8eb; font-family:ui-sans-serif,-apple-system,Segoe UI,Roboto,Arial; }
-        .top { display:flex; gap:10px; align-items:center; padding:10px 14px; background:#0b101a; border-bottom:1px solid #1d2430; position:sticky; top:0; z-index:10; }
-        .wrap { padding:16px; display:grid; gap:10px; }
-        .box  { background:#0b101a; border:1px solid #1d2430; border-radius:10px; padding:10px; }
-        #chart { width:100%; height:520px; display:block; }
-        .note  { opacity:.8; font-size:12px; }
-        .debug { font-family:ui-monospace,Menlo,Consolas,monospace; line-height:1.35; }
-        select, button { background:#141a26; color:#e6e8eb; border:1px solid #222a39; border-radius:6px; padding:4px 8px; }
-        .tag { padding:2px 6px; border-radius:6px; border:1px solid #2a3750; background:#121a28; }
-        .ohlc { font-variant-numeric: tabular-nums; display:flex; gap:12px; align-items:center; }
-        .ohlc b { color:#9ecbff; }
-        .badge { padding:.15rem .5rem; border-radius:.5rem; border:1px solid #2a3750; background:#121a28; }
-        .up { color:#22d3ee; } .down { color:#f87171; }
+        :root {
+          --bg: #0f1226; --fg: #e8ecff; --muted: #9aa3c7; --panel: #171b34;
+          --accent: #6aa6ff; --good: #26a69a; --bad: #ef5350; --border: #2a2f55;
+        }
+        * { box-sizing: border-box; }
+        body { margin:20px; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", Arial; color:var(--fg); background:var(--bg); }
+        h1 { margin:0 0 12px; font-weight:800; }
+        .wrap { max-width:1100px; }
+        .toolbar {
+          display:flex; gap:12px; flex-wrap:wrap; align-items:center;
+          background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:10px 12px; margin-bottom:12px;
+        }
+        .toolbar select, .toolbar input {
+          background:#0d1126; color:var(--fg); border:1px solid #2b2f52; border-radius:8px; padding:8px;
+        }
+        .btn-group { display:inline-flex; border:1px solid var(--border); border-radius:10px; overflow:hidden; background:#121735; }
+        .btn-group button { border:0; background:transparent; color:var(--muted); padding:8px 10px; cursor:pointer; font-weight:700; }
+        .btn-group button + button { border-left:1px solid var(--border); }
+        .btn-group button.active { background:var(--accent); color:#fff; }
+        .status { font-size:13px; color:var(--muted); margin-left:auto; }
+        .chart-card { background:#0b1020; border:1px solid #1b2144; border-radius:12px; padding:12px; }
+        #chart { width:100%; height:560px; }
+        .error { color:#ff8b8b; background:#2a0f14; border:1px solid #611b23; padding:10px; border-radius:8px; margin-top:10px; white-space:pre-wrap; display:none; }
     </style>
 </head>
 <body>
-<div class="top">
-    <strong>KRW FX</strong>
-    <select id="pair">
-        <option>USD-KRW</option><option>JPY-KRW</option>
-        <option>CNY-KRW</option><option>GBP-KRW</option><option>EUR-KRW</option>
-    </select>
-    <select id="tf">
-        <option value="1m">1m</option><option value="5m">5m</option>
-        <option value="15m">15m</option><option value="30m">30m</option>
-        <option value="60m">1h</option><option value="1d" selected>1D</option>
-        <option value="1w">1W</option><option value="1mo">1M</option><option value="1y">1Y</option>
-    </select>
-    <button id="reload">Reload</button>
-    <span id="src" class="note tag">—</span>
-    <span id="libTag" class="badge">lib: —</span>
-</div>
-
 <div class="wrap">
-    <div class="box">
-        <div class="ohlc" id="ohlc">O — H — L — C — <span id="chg" class="">Δ —</span></div>
-        <canvas id="chart"></canvas>
+    <h1>환율 캔들 차트</h1>
+
+    <div class="toolbar">
+        <label>
+            <span style="font-weight:700; margin-right:6px;">종목</span>
+            <select id="pair">
+                <option value="USD/KRW" selected>USD/KRW</option>
+                <option value="USD/JPY">USD/JPY</option>
+                <option value="EUR/USD">EUR/USD</option>
+                <option value="GBP/USD">GBP/USD</option>
+            </select>
+        </label>
+
+        <div class="btn-group" id="tfButtons" role="group" aria-label="timeframe">
+            <button type="button" data-tf="1m">1분</button>
+            <button type="button" data-tf="30m">30분</button>
+            <button type="button" data-tf="1h" class="active">1시간</button>
+            <button type="button" data-tf="4h">4시간</button>
+            <button type="button" data-tf="1d">1일</button>
+            <button type="button" data-tf="1w">1주</button>
+            <button type="button" data-tf="1M">1개월</button>
+        </div>
+
+        <label>
+            <span style="font-weight:700; margin-right:6px;">갯수</span>
+            <input id="limit" type="number" min="50" step="10" value="240" style="width:100px;" />
+        </label>
+
+        <label>
+            <span style="font-weight:700; margin-right:6px;">자동갱신</span>
+            <select id="refresh">
+                <option value="auto" selected>자동</option>
+                <option value="0">끔</option>
+                <option value="3">3초</option>
+                <option value="5">5초</option>
+                <option value="10">10초</option>
+                <option value="15">15초</option>
+                <option value="30">30초</option>
+                <option value="60">60초</option>
+            </select>
+        </label>
+
+        <div id="status" class="status">대기 중</div>
     </div>
-    <div class="note debug" id="status">
-        ready • waiting…
-        <div>url: <span id="dbgUrl">—</span></div>
-        <div>http: <span id="dbgHttp">—</span> • points: <span id="dbgLen">—</span> • mode: <span id="dbgMode">—</span></div>
+
+    <div class="chart-card">
+        <div id="chart"></div>
+        <div id="err" class="error"></div>
     </div>
 </div>
 
-<script type="module">
-    /* ---------- tiny DOM helpers ---------- */
-    const $ = (sel) => document.querySelector(sel);
-    const setText = (sel, t) => { const el = $(sel); if (el) el.textContent = String(t) }
-    const on = (sel, ev, fn) => { const el = $(sel); if (el) el.addEventListener(ev, fn) }
+<script>
+    // ========= API BASE (8081에서 열면 8080으로 프록시) =========
+    const API_BASE =
+      (location.hostname === 'localhost' && location.port === '8081')
+        ? 'http://localhost:8080'
+        : '';
 
-    /* ---------- state ---------- */
-    const REFRESH_MS = 10000;
-    let timer = null;
-    let LIB = 'none';            // 'lwc' | 'none'
-    let LAST = { points:[], pair:'USD-KRW', tf:'1d', source:'—' };
+    // ========= DOM =========
+    const $ = (id) => document.getElementById(id);
+    const pairEl = $('pair'), limitEl = $('limit'), refreshEl = $('refresh');
+    const statusEl = $('status'), errEl = $('err'), tfButtons = $('tfButtons'), chartEl = $('chart');
 
-    /* ---------- loaders ---------- */
-    function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.async=true; s.onload=res; s.onerror=rej; document.head.appendChild(s); }) }
-    async function tryLoadLightweightCharts(){
-      const trial = [
-        // CDN 우선
-        'https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js',
-        'https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js',
-        // 로컬(있으면 사용)
-        '/vendor/lightweight-charts.standalone.production.js'
-      ];
-      for (const u of trial){
-        try { await loadScript(u); if (window.LightweightCharts){ LIB='lwc'; return true; } } catch(e){ /* try next */ }
+    function showErr(msg){ errEl.style.display='block'; errEl.textContent=msg; }
+    function hideErr(){ errEl.style.display='none'; errEl.textContent=''; }
+
+    // ========= 유틸 =========
+    function toSeconds(t){
+      if (typeof t === 'number') return Math.floor(t > 1e12 ? t/1000 : t);
+      if (typeof t === 'string'){
+        const n = Number(t);
+        if (!Number.isNaN(n)) return toSeconds(n);
+        const d = new Date(t); // 'YYYY-MM-DD HH:mm:ss'도 Chrome에서 파싱됨
+        if (!isNaN(d)) return Math.floor(d.getTime()/1000);
       }
-      return false;
+      return NaN;
     }
+    function num(x){ const n = Number(x); return Number.isFinite(n)? n : NaN; }
 
-    /* ---------- utils ---------- */
-    function normalizeRows(points){
-      let rows = Array.isArray(points) ? points.slice() : [];
-      rows = rows.map(p => ({ ...p, x: new Date(p.t) }))
-                 .filter(p => p.x instanceof Date && !isNaN(p.x));
-      rows.sort((a,b)=> a.x - b.x);
-      // unique by timestamp
-      const out=[], seen=new Set();
-      for (const r of rows){ const k=+r.x; if (!seen.has(k)){ out.push(r); seen.add(k); } }
-      return out;
-    }
-    function toCandleOrLine(points){
-      const rows = normalizeRows(points);
-      if (!rows.length) return { rows:[], kind:'none' };
-      const hasOHLC = rows[0] && ['o','h','l','c'].every(k => k in rows[0]);
-      if (hasOHLC){
-        const ohlc = rows.map(p => ({ x:p.x, o:+p.o, h:+p.h, l:+p.l, c:+p.c }))
-                         .filter(v => [v.o,v.h,v.l,v.c].every(Number.isFinite));
-        if (ohlc.length>=2) return { rows: ohlc, kind:'ohlc' };
+    // ========= 차트(KST 표시) =========
+    let chart, candleSeries, resizeObs, liveTimer=null;
+
+    function kstTickFormatter(tsSec, tickType){
+      const d = new Date(tsSec*1000);
+      if (tickType==='Time'){
+        return new Intl.DateTimeFormat('ko-KR',{ timeZone:'Asia/Seoul', hour12:false, hour:'2-digit', minute:'2-digit' }).format(d);
       }
-      const closes = rows.map(p => ({ x:p.x, c:+(p.c ?? p.price) }))
-                         .filter(v => Number.isFinite(v.c));
-      return { rows: closes, kind:'close' };
-    }
-    function synthFromClose(rows){
-      const out=[]; if(!rows.length) return out;
-      for (let i=0;i<rows.length;i++){
-        const prevC = i>0 ? rows[i-1].c : rows[i].c;
-        const c = rows[i].c;
-        out.push({ x: rows[i].x, o:prevC, h:Math.max(prevC,c), l:Math.min(prevC,c), c });
+      if (tickType==='Day'){
+        return new Intl.DateTimeFormat('ko-KR',{ timeZone:'Asia/Seoul', month:'2-digit', day:'2-digit' }).format(d);
       }
-      return out;
+      if (tickType==='Month'){
+        return new Intl.DateTimeFormat('ko-KR',{ timeZone:'Asia/Seoul', year:'2-digit', month:'2-digit' }).format(d);
+      }
+      return new Intl.DateTimeFormat('ko-KR',{ timeZone:'Asia/Seoul', year:'numeric' }).format(d);
+    }
+    function kstCrosshairFormatter(time){
+      const d = new Date(time*1000);
+      const date = new Intl.DateTimeFormat('ko-KR',{ timeZone:'Asia/Seoul', year:'numeric', month:'2-digit', day:'2-digit' }).format(d);
+      const hm = new Intl.DateTimeFormat('ko-KR',{ timeZone:'Asia/Seoul', hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit' }).format(d);
+      return `${date} ${hm} (KST)`;
     }
 
-    /* ---------- renderers ---------- */
-    function drawOHLCBadge(rows){
-      if (!rows.length) { setText('#ohlc','O — H — L — C —'); return; }
-      const v = rows[rows.length-1];
-      const prev = rows.length>1 ? rows[rows.length-2].c : v.o;
-      const chg = v.c - prev;
-      $('#ohlc').innerHTML =
-        `O <b>${fmt(v.o)}</b> H <b>${fmt(v.h)}</b> L <b>${fmt(v.l)}</b> C <b>${fmt(v.c)}</b> <span id="chg" class="${chg>=0?'up':'down'}">Δ ${fmt(chg)}</span>`;
-    }
-    function fmt(n){ return Number(n).toLocaleString('en-US'); }
-
-    // A) Lightweight Charts (있으면 TV 스타일)
-    function drawWithLwc(rows, pair, tf){
-      const wrap = $('#chart');
-      // 깨끗하게 초기화
-      const parent = wrap.parentElement; const fresh=wrap.cloneNode(true); parent.replaceChild(fresh, wrap);
-      const el = $('#chart');
-
-      const chart = LightweightCharts.createChart(el, {
-        layout:{ background:{ type:'solid', color:'#0f1520' }, textColor:'#e6e8eb' },
-        grid:{ vertLines:{ color:'#1d2430' }, horzLines:{ color:'#1d2430' } },
+    function initChart(){
+      chart = LightweightCharts.createChart(chartEl, {
+        width: chartEl.clientWidth, height: 560,
+        layout:{ background:{ color:'#0b1020' }, textColor:'#e3e7ff', fontFamily:'ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,Arial' },
         rightPriceScale:{ borderVisible:false },
-        timeScale:{ borderVisible:false, timeVisible:['1m','5m','15m','30m','60m'].includes(tf) }
+        timeScale:{ borderVisible:false, timeVisible:true, secondsVisible:true, tickMarkFormatter:(t,ty)=>kstTickFormatter(t,ty) },
+        crosshair:{ mode: LightweightCharts.CrosshairMode.Normal },
+        grid:{ vertLines:{ color:'rgba(255,255,255,0.04)' }, horzLines:{ color:'rgba(255,255,255,0.04)' } },
+        localization:{ locale:'ko-KR', timeFormatter:(t)=>kstCrosshairFormatter(t) }
       });
-      const series = chart.addCandlestickSeries({
-        upColor:'#22d3ee', downColor:'#f87171', borderVisible:false, wickUpColor:'#22d3ee', wickDownColor:'#f87171',
+      candleSeries = chart.addCandlestickSeries({
+        upColor:'#26a69a', downColor:'#ef5350',
+        wickUpColor:'#26a69a', wickDownColor:'#ef5350',
+        borderUpColor:'#26a69a', borderDownColor:'#ef5350',
+        priceLineVisible:true,
       });
-      const data = rows.map(p => ({
-        time: Math.floor(p.x.getTime()/1000),
-        open:+p.o, high:+p.h, low:+p.l, close:+p.c
-      })).filter(d => [d.open,d.high,d.low,d.close].every(Number.isFinite));
-      series.setData(data);
-      drawOHLCBadge(rows);
-      setText('#dbgMode', 'candlestick(lwc)');
-      setText('#libTag', 'lib: lwc');
+      if (window.ResizeObserver){
+        resizeObs = new ResizeObserver(()=>chart.applyOptions({ width: chartEl.clientWidth }));
+        resizeObs.observe(chartEl);
+      }else{
+        window.addEventListener('resize', ()=>chart.applyOptions({ width: chartEl.clientWidth }));
+      }
     }
 
-    // B) 폴백: 라이브러리 없이 캔버스에 직접 캔들 그리기
-    function drawByCanvas(rows){
-      const cvs = $('#chart');
-      const dpr = window.devicePixelRatio || 1;
-      const cssW = cvs.clientWidth || 900, cssH = cvs.clientHeight || 520;
-      cvs.width = Math.floor(cssW*dpr); cvs.height = Math.floor(cssH*dpr);
-      const ctx = cvs.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
-      ctx.clearRect(0,0,cssW,cssH);
-
-      if (!rows.length){ setText('#dbgMode','none'); return; }
-
-      // padding & scales
-      const padL=48, padR=12, padT=12, padB=24;
-      const W = cssW - padL - padR, H = cssH - padT - padB;
-      const highs = rows.map(r=>r.h), lows = rows.map(r=>r.l);
-      let yMax=Math.max(...highs), yMin=Math.min(...lows);
-      if (yMax===yMin){ yMax+=1; yMin-=1; }
-      const xStep = W / Math.max(1, rows.length-1);
-      const toX = i => padL + i*xStep;
-      const toY = v => padT + (yMax - v) * (H/(yMax-yMin));
-
-      // grid
-      ctx.strokeStyle='rgba(255,255,255,.06)'; ctx.lineWidth=1;
-      ctx.beginPath(); for(let i=0;i<6;i++){ const yy=padT + i*(H/5); ctx.moveTo(padL,yy); ctx.lineTo(padL+W,yy); } ctx.stroke();
-      // y labels
-      ctx.fillStyle='rgba(230,232,235,.75)'; ctx.font='12px ui-monospace,Menlo,Consolas,monospace';
-      for(let i=0;i<=5;i++){ const v=yMax - (yMax-yMin)*(i/5); const yy=padT + i*(H/5); ctx.fillText(v.toFixed(2), 6, yy+4); }
-
-      // candles
-      const bodyW = Math.max(3, Math.min(16, xStep*0.6));
-      for(let i=0;i<rows.length;i++){
-        const r = rows[i];
-        const x = toX(i);
-        const yO=toY(r.o), yC=toY(r.c), yH=toY(r.h), yL=toY(r.l);
-        const up = r.c>=r.o;
-        ctx.strokeStyle = up ? '#22d3ee' : '#f87171';
-        ctx.fillStyle   = up ? '#22d3ee' : '#f87171';
-
-        // wick
-        ctx.beginPath(); ctx.moveTo(x, yH); ctx.lineTo(x, yL); ctx.stroke();
-
-        // body
-        const top = Math.min(yO,yC), h = Math.max(1, Math.abs(yC-yO));
-        ctx.fillRect(x - bodyW/2, top, bodyW, h);
-      }
-
-      drawOHLCBadge(rows);
-      setText('#dbgMode', 'candlestick(canvas)');
-      setText('#libTag', 'lib: none');
+    // ========= 데이터 =========
+    async function fetchCandles(pair, tf, limit){
+      const qs = new URLSearchParams({ pair: pair.trim(), tf: tf.trim(), limit: String(limit) });
+      const url = `${API_BASE}/api/td-candles?${qs}`;
+      const res = await fetch(url, { mode: API_BASE ? 'cors' : 'same-origin' });
+      const text = await res.text();
+      if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+      try { return JSON.parse(text); } catch { throw new Error('서버 응답이 JSON이 아닙니다.'); }
     }
 
-    /* ---------- main draw dispatcher ---------- */
-    function draw(points, pair, tf, source){
-      LAST = { points, pair, tf, source };
-      const parsed = toCandleOrLine(points);
-      setText('#dbgLen', parsed.rows.length);
-      if (!parsed.rows.length){
-        setText('#status','데이터 0건');
-        setText('#src', source || '—');
-        setText('#dbgMode','none');
-        return;
+    // ★★★ 핵심 수정: 배열로 감싼 {values:[]} 형태도 평탄화해서 처리 ★★★
+    function normalizeCandles(raw){
+      let arr = [];
+      if (Array.isArray(raw)){
+        // [ { values:[...], ... } ] → values만 펼치기
+        if (raw.length && raw.every(x => x && Array.isArray(x.values))){
+          arr = raw.flatMap(x => x.values);
+        } else {
+          arr = raw;
+        }
+      } else if (raw && Array.isArray(raw.values)){
+        arr = raw.values;
+      } else if (raw && Array.isArray(raw.data)){
+        arr = raw.data;
       }
-      const rows = parsed.kind==='ohlc' ? parsed.rows : synthFromClose(parsed.rows);
 
-      if (LIB==='lwc' && window.LightweightCharts){
-        drawWithLwc(rows, pair, tf);
-      } else {
-        drawByCanvas(rows);
-      }
-      setText('#src', source || '—');
-      setText('#status', `ok • ${new Date().toLocaleTimeString()} • rows=${rows.length}`);
+      const out = arr.map(c => {
+        const t = c.time ?? c.timestamp ?? c.datetime ?? c.date;
+        const open  = num(c.open  ?? c.o);
+        const high  = num(c.high  ?? c.h);
+        const low   = num(c.low   ?? c.l);
+        const close = num(c.close ?? c.c);
+        const ts = toSeconds(t);
+        return { time: ts, open, high, low, close };
+      }).filter(x =>
+        Number.isFinite(x.time) && Number.isFinite(x.open) &&
+        Number.isFinite(x.high) && Number.isFinite(x.low) &&
+        Number.isFinite(x.close)
+      ).sort((a,b) => a.time - b.time);
+
+      return out;
     }
 
-    /* ---------- API (DB → TD → 기타 폴백) ---------- */
- async function fetchCandles(pair, tf, limit=240){
-  const url = `/api/td-candles?pair=${encodeURIComponent(pair)}&tf=${tf}&limit=${limit}`;
-  setText('#dbgUrl', url);
-  const r = await fetch(url, { cache:'no-store' });
-  setText('#dbgHttp', `${r.status} ${r.statusText}`);
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
-    async function reload(){
-      clearTimeout(timer);
-      const pair = $('#pair')?.value ?? 'USD-KRW';
-      const tf   = $('#tf')?.value   ?? '1d';
+    async function loadChart(pair, tf, limit){
+      hideErr();
+      statusEl.textContent = `로딩 중… ${pair} / ${tf}`;
       try{
-        const { points, source } = await fetchCandles(pair, tf, tf==='1y'? 120 : 240);
-        draw(points, pair, tf, source);
+        const raw = await fetchCandles(pair, tf, limit);
+        const candles = normalizeCandles(raw);
+        if (!candles.length) throw new Error('표시할 캔들이 없습니다(응답 형식 또는 값 확인).');
+        candleSeries.setData(candles);
+        chart.timeScale().fitContent();
+        statusEl.textContent = `불러옴: ${pair} / ${tf} / ${candles.length}개`;
       }catch(e){
         console.error(e);
-        setText('#status','에러: '+String(e).slice(0,140));
-        setText('#dbgMode','error');
-      }finally{
-        timer = setTimeout(reload, REFRESH_MS);
+        showErr(String(e.message || e));
+        statusEl.textContent = '에러';
       }
     }
 
-    on('#reload','click', reload);
-    on('#pair','change', reload);
-    on('#tf','change', reload);
+    async function tickUpdate(pair, tf){
+      try{
+        const raw = await fetchCandles(pair, tf, 2);
+        const candles = normalizeCandles(raw);
+        if (!candles.length) return;
+        candleSeries.update(candles[candles.length-1]);
+      }catch(e){
+        console.debug('live update error', e);
+      }
+    }
 
-    // 부팅 시: 라이브러리 로드 시도 후 첫 렌더
-    (async () => {
-      const ok = await tryLoadLightweightCharts();
-      setText('#libTag', 'lib: ' + (ok ? 'lwc' : 'none'));
-      window.addEventListener('load', reload);
-    })();
+    // ========= 라이브 =========
+    function defaultRefreshSec(tf){
+      switch(tf){
+        case '1m': return 3;
+        case '30m': return 10;
+        case '1h': return 30;
+        case '4h': return 60;
+        case '1d': return 180;
+        case '1w': return 300;
+        case '1M': return 600;
+        default: return 10;
+      }
+    }
+    function startLive(pair, tf){
+      stopLive();
+      const val = refreshEl.value;
+      const sec = (val === 'auto') ? defaultRefreshSec(tf) : Number(val)||0;
+      if (sec > 0){
+        liveTimer = setInterval(()=>tickUpdate(pair, tf), sec*1000);
+        statusEl.textContent += ` • 실시간 ${sec}s`;
+      }
+    }
+    function stopLive(){ if (liveTimer) clearInterval(liveTimer); liveTimer=null; }
+
+    // ========= 상태 & 이벤트 =========
+    const State = { pair: pairEl.value, tf:'1h', limit: Number(limitEl.value)||240 };
+
+    function setActiveTF(tf){
+      [...tfButtons.querySelectorAll('button')].forEach(b => b.classList.toggle('active', b.dataset.tf === tf));
+    }
+
+    tfButtons.addEventListener('click', async (e)=>{
+      const btn = e.target.closest('button[data-tf]'); if (!btn) return;
+      const tf = btn.dataset.tf; if (State.tf === tf) return;
+      State.tf = tf; setActiveTF(tf);
+      stopLive(); await loadChart(State.pair, State.tf, State.limit); startLive(State.pair, State.tf);
+    });
+
+    pairEl.addEventListener('change', async ()=>{
+      State.pair = pairEl.value;
+      stopLive(); await loadChart(State.pair, State.tf, State.limit); startLive(State.pair, State.tf);
+    });
+
+    limitEl.addEventListener('change', async ()=>{
+      State.limit = Math.max(50, Number(limitEl.value)||240);
+      stopLive(); await loadChart(State.pair, State.tf, State.limit); startLive(State.pair, State.tf);
+    });
+
+    refreshEl.addEventListener('change', ()=> startLive(State.pair, State.tf));
+
+    document.addEventListener('DOMContentLoaded', async ()=>{
+      initChart();
+      await loadChart(State.pair, State.tf, State.limit);
+      startLive(State.pair, State.tf);
+    });
 </script>
 </body>
 </html>

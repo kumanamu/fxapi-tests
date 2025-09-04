@@ -1,146 +1,114 @@
 package com.fxapp.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fxapp.config.TwelveDataProps;
 import lombok.RequiredArgsConstructor;
-import org.springframework.cache.Cache;
-import org.springframework.cache.CacheManager;
-import org.springframework.http.HttpStatus;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.util.UriComponentsBuilder;
 
+import java.math.BigDecimal;
+import java.net.URI;
+import java.time.*;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class TwelveDataService {
 
-    private final WebClient webClient;         // ✅ 단일 WebClient (Twelve Data)
-    private final ObjectMapper mapper;
-    private final TwelveDataProps props;
-    private final CacheManager cacheManager;
+    private final WebClient webClient;
 
-    private static final String CACHE = "td:fx";
+    @Value("${twelve.api-key}")
+    private String apiKey;
 
-    public Map<String, Object> fetchCandles(String pair, String tf, int limit) throws Exception {
-        String key = cacheKey(pair, tf, limit);
-        try {
-            Map<String, Object> live = timeSeries(pair, tf, limit);
-            putCache(key, live);
-            return live;
-        } catch (Exception ex) {
-            Map<String, Object> stale = staleOrNull(pair, tf, limit);
-            if (stale != null) return stale;
-            if (ex instanceof ResponseStatusException rse) throw rse;
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Upstream error", ex);
-        }
-    }
+    public record CandleResp(List<Map<String,Object>> points, String source) {}
 
-    public Map<String, Object> fetchQuote(String pair) throws Exception {
-        String symbol = pairToSymbol(pair);
-        String url = "/quote?symbol=" + symbol + "&apikey=" + props.getApiKey();
-        String body = webClient.get().uri(url).retrieve().bodyToMono(String.class).block();
-        JsonNode root = mapper.readTree(body);
-
-        if (root.has("status") && "error".equals(root.path("status").asText())) {
-            String msg = root.path("message").asText("TwelveData error");
-            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, msg);
-        }
-        Map<String,Object> result = new HashMap<>();
-        result.put("pair", pair);
-        result.put("last", root.path("price").asDouble(root.path("close").asDouble(Double.NaN)));
-        result.put("bid", root.path("bid").asDouble(Double.NaN));
-        result.put("ask", root.path("ask").asDouble(Double.NaN));
-        result.put("source", "TwelveData quote");
-        return result;
-    }
-
-    private Map<String, Object> timeSeries(String pair, String tf, int limit) throws Exception {
-        String symbol = pairToSymbol(pair);
-        String interval = switch (tf) {
-            case "1m"  -> "1min";
-            case "5m"  -> "5min";
-            case "15m" -> "15min";
-            case "30m" -> "30min";
-            case "60m" -> "1h";
-            case "1d"  -> "1day";
-            case "1mo" -> "1month";
-            case "1y"  -> "1day"; // 1년: 일봉으로 받아 슬라이스
-            default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "unsupported tf: " + tf);
+    private String toInterval(String tf){
+        return switch (tf){
+            case "1m" -> "1min";
+            case "5m" -> "5min";
+            case "15m"-> "15min";
+            case "30m"-> "30min";
+            case "1h" -> "1hour";
+            case "1w" -> "1week";
+            case "1mo"-> "1month";
+            case "1y" -> "1year";
+            default   -> "1day";
         };
-        int outSize = ("1y".equals(tf)) ? Math.max(365, limit) : Math.max(120, limit);
-
-        String url = "/time_series?symbol=" + symbol +
-                "&interval=" + interval +
-                "&outputsize=" + outSize +
-                "&order=ASC&timezone=Asia/Seoul" +
-                "&apikey=" + props.getApiKey();
-
-        String body = webClient.get().uri(url).retrieve().bodyToMono(String.class).block();
-        JsonNode root = mapper.readTree(body);
-
-        if (root.has("status") && "error".equals(root.path("status").asText())) {
-            String msg = root.path("message").asText("TwelveData error");
-            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, msg);
+    }
+    private static final DateTimeFormatter TD_LDT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private Instant parseTdInstant(String s){
+        if (s == null) return null;
+        if (s.length()==10) { // "yyyy-MM-dd"
+            return LocalDate.parse(s).atStartOfDay(ZoneOffset.UTC).toInstant();
         }
-        JsonNode values = root.path("values");
-        if (values.isMissingNode() || !values.isArray()) {
-            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "values not found");
+        if (s.indexOf('T')>0) { // ISO
+            String iso = s.endsWith("Z")? s : s+"Z";
+            return Instant.parse(iso);
+        }
+        // "yyyy-MM-dd HH:mm:ss"
+        LocalDateTime ldt = LocalDateTime.parse(s, TD_LDT);
+        return ldt.toInstant(ZoneOffset.UTC);
+    }
+
+    // 🔽 sync=true: 같은 키에 대한 동시요청을 1회 호출로 병합
+    @Cacheable(cacheResolver = "tdCacheResolver",
+            key = "#pair + '|' + #tf + '|' + #limit",
+            sync = true)
+    public CandleResp getCandles(String pair, String tf, int limit){
+
+        String interval = toInterval(tf);
+        String symbol = pair.replace('-', '/');
+
+        URI uri = UriComponentsBuilder.fromHttpUrl("https://api.twelvedata.com/time_series")
+                .queryParam("symbol", symbol)
+                .queryParam("interval", interval)
+                .queryParam("outputsize", limit)
+                .queryParam("order", "ASC")
+                .queryParam("timezone", "UTC")
+                .queryParam("apikey", apiKey)
+                .build(true).toUri();
+
+        log.debug("TwelveData GET {}", uri);
+        Map<String,Object> body = webClient.get().uri(uri).retrieve()
+                .onStatus(HttpStatusCode::isError, resp->resp.bodyToMono(String.class)
+                        .map(msg-> new ResponseStatusException(resp.statusCode(), "TwelveData: " + msg)))
+                .bodyToMono(new ParameterizedTypeReference<Map<String,Object>>(){}).block();
+
+        // values 파싱
+        Object rawValues = body.get("values");
+        if (!(rawValues instanceof List<?> list)) {
+            // 에러 케이스(credit 초과 등)도 여기서 throw
+            throw new ResponseStatusException(org.springframework.http.HttpStatus.BAD_GATEWAY, "TwelveData: " + String.valueOf(body));
         }
 
-        List<Map<String,Object>> pts = new ArrayList<>();
-        for (JsonNode v : values) {
-            String t = v.path("datetime").asText();
-            double o = v.path("open").asDouble();
-            double h = v.path("high").asDouble();
-            double l = v.path("low").asDouble();
-            double c = v.path("close").asDouble();
-            if (Double.isFinite(o) && Double.isFinite(h) && Double.isFinite(l) && Double.isFinite(c)) {
-                pts.add(Map.of("t", t, "o", o, "h", h, "l", l, "c", c));
-            }
+        List<Map<String,Object>> points = new ArrayList<>();
+        for (Object o : list){
+            Map<?,?> v = (Map<?,?>) o;
+            String dt = String.valueOf(v.get("datetime"));
+            Instant t = parseTdInstant(dt);
+
+            BigDecimal o_ = new BigDecimal(String.valueOf(v.get("open")));
+            BigDecimal h_ = new BigDecimal(String.valueOf(v.get("high")));
+            BigDecimal l_ = new BigDecimal(String.valueOf(v.get("low")));
+            BigDecimal c_ = new BigDecimal(String.valueOf(v.get("close")));
+
+            Map<String,Object> one = new LinkedHashMap<>();
+            one.put("t", t.toString());
+            one.put("o", o_);
+            one.put("h", h_);
+            one.put("l", l_);
+            one.put("c", c_);
+            points.add(one);
         }
-        pts.sort(Comparator.comparing(m -> (String)m.get("t")));
-
-        if ("1y".equals(tf) && pts.size() > 365) pts = pts.subList(pts.size() - 365, pts.size());
-        if (limit > 0 && pts.size() > limit) pts = pts.subList(pts.size() - limit, pts.size());
-
-        Map<String,Object> result = new HashMap<>();
-        result.put("pair", pair);
-        result.put("tf", tf);
-        result.put("source", "TwelveData " + tf);
-        result.put("points", pts);
-        result.put("stale", false);
-        return result;
-    }
-
-    private String pairToSymbol(String pair) {
-        String[] p = pair.split("-");
-        return p[0] + "/" + p[1];
-    }
-
-    private String cacheKey(String pair, String tf, int limit) { return pair + "|" + tf + "|" + limit; }
-
-    private void putCache(String key, Map<String,Object> val){
-        Cache c = cacheManager.getCache(CACHE);
-        if (c != null) c.put(key, val);
-    }
-
-    @SuppressWarnings("unchecked")
-    public Map<String, Object> staleOrNull(String pair, String tf, int limit){
-        Cache c = cacheManager.getCache(CACHE);
-        if (c == null) return null;
-        Map<String, Object> cached = c.get(cacheKey(pair, tf, limit), Map.class);
-        if (cached == null) return null;
-        Map<String,Object> copy = new HashMap<>(cached);
-        copy.put("stale", true);
-        copy.put("source", cached.getOrDefault("source","TwelveData") + " (stale)");
-        return copy;
-    }
-
-    public Map<String,Object> fallbackDaily(String pair, int limit) {
-        try { return timeSeries(pair, "1d", Math.max(limit, 200)); }
-        catch (Exception e) { return null; }
+        // 오름차순 보장
+        points.sort(Comparator.comparing(m -> Instant.parse((String)m.get("t"))));
+        return new CandleResp(points, "twelvedata");
     }
 }
