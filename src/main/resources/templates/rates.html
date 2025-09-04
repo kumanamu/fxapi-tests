@@ -1,25 +1,24 @@
 <!doctype html>
 <html lang="ko">
 <head>
-    <meta charset="UTF-8"/>
-    <meta name="viewport" content="width=device-width,initial-scale=1"/>
-    <title>KRW FX • Candles (Twelve Data, 70s)</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>KRW FX • Candles</title>
     <style>
         :root { color-scheme: dark; }
         body { margin:0; background:#0f1520; color:#e6e8eb; font-family:ui-sans-serif,-apple-system,Segoe UI,Roboto,Arial; }
-        .top { display:flex; gap:10px; align-items:center; padding:10px 14px; background:#0b101a; border-bottom:1px solid #1d2430; }
-        .top .spacer{ flex:1 }
-        .hud { display:flex; gap:10px; align-items:center; font-size:14px; }
-        .hud .lab{ opacity:.7 }
-        .wrap { padding:14px; display:grid; gap:10px; }
-        .panel { background:#0b101a; border:1px solid #1d2430; border-radius:12px; padding:10px; }
-        #tv { width:100%; height:540px; }
-        select,button{ background:#141a26; color:#e6e8eb; border:1px solid #222a39; border-radius:8px; padding:6px 10px; }
-        .tag { padding:3px 8px; border-radius:999px; border:1px solid #2a3750; background:#121a28; font-size:12px; }
-        .note{ opacity:.8; font-size:12px; }
-        .debug{ font-family:ui-monospace,Menlo,Consolas,monospace; line-height:1.35; }
-        .bad { color:#ff7b7b; }
-        .ok { color:#9be39b; }
+        .top { display:flex; gap:10px; align-items:center; padding:10px 14px; background:#0b101a; border-bottom:1px solid #1d2430; position:sticky; top:0; z-index:10; }
+        .wrap { padding:16px; display:grid; gap:10px; }
+        .box  { background:#0b101a; border:1px solid #1d2430; border-radius:10px; padding:10px; }
+        #chart { width:100%; height:520px; display:block; }
+        .note  { opacity:.8; font-size:12px; }
+        .debug { font-family:ui-monospace,Menlo,Consolas,monospace; line-height:1.35; }
+        select, button { background:#141a26; color:#e6e8eb; border:1px solid #222a39; border-radius:6px; padding:4px 8px; }
+        .tag { padding:2px 6px; border-radius:6px; border:1px solid #2a3750; background:#121a28; }
+        .ohlc { font-variant-numeric: tabular-nums; display:flex; gap:12px; align-items:center; }
+        .ohlc b { color:#9ecbff; }
+        .badge { padding:.15rem .5rem; border-radius:.5rem; border:1px solid #2a3750; background:#121a28; }
+        .up { color:#22d3ee; } .down { color:#f87171; }
     </style>
 </head>
 <body>
@@ -30,192 +29,249 @@
         <option>CNY-KRW</option><option>GBP-KRW</option><option>EUR-KRW</option>
     </select>
     <select id="tf">
-        <option value="1m">1m</option>
-        <option value="5m">5m</option><option value="15m">15m</option>
-        <option value="30m" selected>30m</option><option value="60m">1h</option>
-        <option value="1d">1D</option><option value="1mo">1M</option><option value="1y">1Y</option>
+        <option value="1m">1m</option><option value="5m">5m</option>
+        <option value="15m">15m</option><option value="30m">30m</option>
+        <option value="60m">1h</option><option value="1d" selected>1D</option>
+        <option value="1w">1W</option><option value="1mo">1M</option><option value="1y">1Y</option>
     </select>
     <button id="reload">Reload</button>
-    <span id="src" class="tag">—</span>
-    <div class="spacer"></div>
-    <!-- HUD -->
-    <div class="hud" id="hud">
-        <span class="lab">현재가</span><strong id="pLast">—</strong>
-        <span class="lab">O</span><span id="pO">—</span>
-        <span class="lab">H</span><span id="pH">—</span>
-        <span class="lab">L</span><span id="pL">—</span>
-        <span class="lab">C</span><span id="pC">—</span>
-    </div>
+    <span id="src" class="note tag">—</span>
+    <span id="libTag" class="badge">lib: —</span>
 </div>
 
 <div class="wrap">
-    <div class="panel"><div id="tv"></div></div>
-    <div class="panel note debug">
-        <div id="status">ready…</div>
+    <div class="box">
+        <div class="ohlc" id="ohlc">O — H — L — C — <span id="chg" class="">Δ —</span></div>
+        <canvas id="chart"></canvas>
+    </div>
+    <div class="note debug" id="status">
+        ready • waiting…
         <div>url: <span id="dbgUrl">—</span></div>
-        <div>http: <span id="dbgHttp">—</span> • bars: <span id="dbgLen">—</span></div>
+        <div>http: <span id="dbgHttp">—</span> • points: <span id="dbgLen">—</span> • mode: <span id="dbgMode">—</span></div>
     </div>
 </div>
-<script>
-    // ?api=http://localhost:8081 쿼리로 오버라이드 가능
-    const API_BASE = new URLSearchParams(location.search).get('api') || '';
-    // ... 아래 fetch 에서 `${API_BASE}` 프리픽스만 붙이면 끝
-</script>
 
-<!-- TradingView lightweight-charts -->
-<script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+<script type="module">
+    /* ---------- tiny DOM helpers ---------- */
+    const $ = (sel) => document.querySelector(sel);
+    const setText = (sel, t) => { const el = $(sel); if (el) el.textContent = String(t) }
+    const on = (sel, ev, fn) => { const el = $(sel); if (el) el.addEventListener(ev, fn) }
 
-<script>
-    const $ = id => document.getElementById(id);
-    const numfmt = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 6 });
-    const setNum = (id, v) => { const el=$(id); if (el) el.textContent = Number.isFinite(v) ? numfmt.format(v) : String(v); };
-    const setText= (id, v) => { const el=$(id); if (el) el.textContent = String(v); };
+    /* ---------- state ---------- */
+    const REFRESH_MS = 10000;
+    let timer = null;
+    let LIB = 'none';            // 'lwc' | 'none'
+    let LAST = { points:[], pair:'USD-KRW', tf:'1d', source:'—' };
 
-    // 70초 주기
-    const REFRESH_MS = 70_000;
-    const RATE_LIMIT_COOLDOWN = 70_000;
+    /* ---------- loaders ---------- */
+    function loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.async=true; s.onload=res; s.onerror=rej; document.head.appendChild(s); }) }
+    async function tryLoadLightweightCharts(){
+      const trial = [
+        // CDN 우선
+        'https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js',
+        'https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js',
+        // 로컬(있으면 사용)
+        '/vendor/lightweight-charts.standalone.production.js'
+      ];
+      for (const u of trial){
+        try { await loadScript(u); if (window.LightweightCharts){ LIB='lwc'; return true; } } catch(e){ /* try next */ }
+      }
+      return false;
+    }
 
-    let chart, candle, timer, lastBar;
+    /* ---------- utils ---------- */
+    function normalizeRows(points){
+      let rows = Array.isArray(points) ? points.slice() : [];
+      rows = rows.map(p => ({ ...p, x: new Date(p.t) }))
+                 .filter(p => p.x instanceof Date && !isNaN(p.x));
+      rows.sort((a,b)=> a.x - b.x);
+      // unique by timestamp
+      const out=[], seen=new Set();
+      for (const r of rows){ const k=+r.x; if (!seen.has(k)){ out.push(r); seen.add(k); } }
+      return out;
+    }
+    function toCandleOrLine(points){
+      const rows = normalizeRows(points);
+      if (!rows.length) return { rows:[], kind:'none' };
+      const hasOHLC = rows[0] && ['o','h','l','c'].every(k => k in rows[0]);
+      if (hasOHLC){
+        const ohlc = rows.map(p => ({ x:p.x, o:+p.o, h:+p.h, l:+p.l, c:+p.c }))
+                         .filter(v => [v.o,v.h,v.l,v.c].every(Number.isFinite));
+        if (ohlc.length>=2) return { rows: ohlc, kind:'ohlc' };
+      }
+      const closes = rows.map(p => ({ x:p.x, c:+(p.c ?? p.price) }))
+                         .filter(v => Number.isFinite(v.c));
+      return { rows: closes, kind:'close' };
+    }
+    function synthFromClose(rows){
+      const out=[]; if(!rows.length) return out;
+      for (let i=0;i<rows.length;i++){
+        const prevC = i>0 ? rows[i-1].c : rows[i].c;
+        const c = rows[i].c;
+        out.push({ x: rows[i].x, o:prevC, h:Math.max(prevC,c), l:Math.min(prevC,c), c });
+      }
+      return out;
+    }
 
-    function ensureChart(){
-      if (chart) return;
-      const el = $('tv');
-      chart = LightweightCharts.createChart(el, {
-        layout:{ background:{ color:'#0f1520' }, textColor:'#e6e8eb' },
-        grid:{ vertLines:{ color:'rgba(255,255,255,.06)' }, horzLines:{ color:'rgba(255,255,255,.06)' } },
+    /* ---------- renderers ---------- */
+    function drawOHLCBadge(rows){
+      if (!rows.length) { setText('#ohlc','O — H — L — C —'); return; }
+      const v = rows[rows.length-1];
+      const prev = rows.length>1 ? rows[rows.length-2].c : v.o;
+      const chg = v.c - prev;
+      $('#ohlc').innerHTML =
+        `O <b>${fmt(v.o)}</b> H <b>${fmt(v.h)}</b> L <b>${fmt(v.l)}</b> C <b>${fmt(v.c)}</b> <span id="chg" class="${chg>=0?'up':'down'}">Δ ${fmt(chg)}</span>`;
+    }
+    function fmt(n){ return Number(n).toLocaleString('en-US'); }
+
+    // A) Lightweight Charts (있으면 TV 스타일)
+    function drawWithLwc(rows, pair, tf){
+      const wrap = $('#chart');
+      // 깨끗하게 초기화
+      const parent = wrap.parentElement; const fresh=wrap.cloneNode(true); parent.replaceChild(fresh, wrap);
+      const el = $('#chart');
+
+      const chart = LightweightCharts.createChart(el, {
+        layout:{ background:{ type:'solid', color:'#0f1520' }, textColor:'#e6e8eb' },
+        grid:{ vertLines:{ color:'#1d2430' }, horzLines:{ color:'#1d2430' } },
         rightPriceScale:{ borderVisible:false },
-        timeScale:{ borderVisible:false, secondsVisible:false },
-        crosshair:{ mode: LightweightCharts.CrosshairMode.Normal },
-        localization:{ priceFormatter: p => numfmt.format(p) },
+        timeScale:{ borderVisible:false, timeVisible:['1m','5m','15m','30m','60m'].includes(tf) }
       });
-      candle = chart.addCandlestickSeries({
-        upColor:'#22d3ee', downColor:'#f87171',
-        wickUpColor:'#22d3ee', wickDownColor:'#f87171',
-        borderVisible:false
+      const series = chart.addCandlestickSeries({
+        upColor:'#22d3ee', downColor:'#f87171', borderVisible:false, wickUpColor:'#22d3ee', wickDownColor:'#f87171',
       });
-
-      const ro = new ResizeObserver(()=>{
-        const w = el.clientWidth, h = el.clientHeight;
-        chart.applyOptions({ width:w, height:h });
-        chart.timeScale().fitContent();        // ✅ 리사이즈 후 가시영역 보정
-      });
-      ro.observe(el);
-
-      // 초기 사이즈 적용 + 보정
-      chart.applyOptions({ width:el.clientWidth, height:el.clientHeight });
-      chart.timeScale().fitContent();
-
-      chart.subscribeCrosshairMove(param=>{
-        const v = param?.seriesData?.get?.(candle);
-        if (v && v.open!==undefined) {
-          setNum('pLast', v.close); setNum('pO', v.open); setNum('pH', v.high); setNum('pL', v.low); setNum('pC', v.close);
-        } else if (lastBar) {
-          setNum('pLast', lastBar.close); setNum('pO', lastBar.open); setNum('pH', lastBar.high); setNum('pL', lastBar.low); setNum('pC', lastBar.close);
-        }
-      });
+      const data = rows.map(p => ({
+        time: Math.floor(p.x.getTime()/1000),
+        open:+p.o, high:+p.h, low:+p.l, close:+p.c
+      })).filter(d => [d.open,d.high,d.low,d.close].every(Number.isFinite));
+      series.setData(data);
+      drawOHLCBadge(rows);
+      setText('#dbgMode', 'candlestick(lwc)');
+      setText('#libTag', 'lib: lwc');
     }
 
-    function normalize(points){
-      const arr = Array.isArray(points) ? points.slice() : [];
-      // Twelve Data는 "YYYY-MM-DD HH:mm:ss" 형태. 로컬 파싱이므로 브라우저별 차이를 줄이려면 'YYYY-MM-DDTHH:mm:ss' 로 치환해도 됨.
-      arr.forEach(p => {
-        const iso = String(p.t).replace(' ', 'T'); // ✅ 파싱 안정성 보강
-        p._ts = new Date(iso).getTime();
-      });
-      arr = arr.filter(p => Number.isFinite(p._ts));
-      arr.sort((a,b)=>a._ts-b._ts);
-      const seen=new Set(), out=[];
-      for(const p of arr){ if(!seen.has(p._ts)){ out.push(p); seen.add(p._ts);} }
-      return out;
-    }
-    const isIntraday = tf => ['1m','5m','15m','30m','60m'].includes(tf);
-    const toTime = (t, tf) => {
-      const d = new Date(String(t).replace(' ', 'T'));
-      if (isIntraday(tf)) return Math.floor(d.getTime()/1000);
-      return { year:d.getUTCFullYear(), month:d.getUTCMonth()+1, day:d.getUTCDate() };
-    };
+    // B) 폴백: 라이브러리 없이 캔버스에 직접 캔들 그리기
+    function drawByCanvas(rows){
+      const cvs = $('#chart');
+      const dpr = window.devicePixelRatio || 1;
+      const cssW = cvs.clientWidth || 900, cssH = cvs.clientHeight || 520;
+      cvs.width = Math.floor(cssW*dpr); cvs.height = Math.floor(cssH*dpr);
+      const ctx = cvs.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+      ctx.clearRect(0,0,cssW,cssH);
 
-    function toCandles(points, tf){
-      const rows = normalize(points);
-      if (!rows.length) return [];
-      const out = rows.map(p=>{
-        const o=+p.o, h=+p.h, l=+p.l, c=+p.c;
-        return { time:toTime(p.t,tf), open:o, high:h, low:l, close:c };
-      }).filter(b=>[b.open,b.high,b.low,b.close].every(Number.isFinite));
-      return out;
+      if (!rows.length){ setText('#dbgMode','none'); return; }
+
+      // padding & scales
+      const padL=48, padR=12, padT=12, padB=24;
+      const W = cssW - padL - padR, H = cssH - padT - padB;
+      const highs = rows.map(r=>r.h), lows = rows.map(r=>r.l);
+      let yMax=Math.max(...highs), yMin=Math.min(...lows);
+      if (yMax===yMin){ yMax+=1; yMin-=1; }
+      const xStep = W / Math.max(1, rows.length-1);
+      const toX = i => padL + i*xStep;
+      const toY = v => padT + (yMax - v) * (H/(yMax-yMin));
+
+      // grid
+      ctx.strokeStyle='rgba(255,255,255,.06)'; ctx.lineWidth=1;
+      ctx.beginPath(); for(let i=0;i<6;i++){ const yy=padT + i*(H/5); ctx.moveTo(padL,yy); ctx.lineTo(padL+W,yy); } ctx.stroke();
+      // y labels
+      ctx.fillStyle='rgba(230,232,235,.75)'; ctx.font='12px ui-monospace,Menlo,Consolas,monospace';
+      for(let i=0;i<=5;i++){ const v=yMax - (yMax-yMin)*(i/5); const yy=padT + i*(H/5); ctx.fillText(v.toFixed(2), 6, yy+4); }
+
+      // candles
+      const bodyW = Math.max(3, Math.min(16, xStep*0.6));
+      for(let i=0;i<rows.length;i++){
+        const r = rows[i];
+        const x = toX(i);
+        const yO=toY(r.o), yC=toY(r.c), yH=toY(r.h), yL=toY(r.l);
+        const up = r.c>=r.o;
+        ctx.strokeStyle = up ? '#22d3ee' : '#f87171';
+        ctx.fillStyle   = up ? '#22d3ee' : '#f87171';
+
+        // wick
+        ctx.beginPath(); ctx.moveTo(x, yH); ctx.lineTo(x, yL); ctx.stroke();
+
+        // body
+        const top = Math.min(yO,yC), h = Math.max(1, Math.abs(yC-yO));
+        ctx.fillRect(x - bodyW/2, top, bodyW, h);
+      }
+
+      drawOHLCBadge(rows);
+      setText('#dbgMode', 'candlestick(canvas)');
+      setText('#libTag', 'lib: none');
     }
 
+    /* ---------- main draw dispatcher ---------- */
+    function draw(points, pair, tf, source){
+      LAST = { points, pair, tf, source };
+      const parsed = toCandleOrLine(points);
+      setText('#dbgLen', parsed.rows.length);
+      if (!parsed.rows.length){
+        setText('#status','데이터 0건');
+        setText('#src', source || '—');
+        setText('#dbgMode','none');
+        return;
+      }
+      const rows = parsed.kind==='ohlc' ? parsed.rows : synthFromClose(parsed.rows);
+
+      if (LIB==='lwc' && window.LightweightCharts){
+        drawWithLwc(rows, pair, tf);
+      } else {
+        drawByCanvas(rows);
+      }
+      setText('#src', source || '—');
+      setText('#status', `ok • ${new Date().toLocaleTimeString()} • rows=${rows.length}`);
+    }
+
+    /* ---------- API (DB → TD → 기타 폴백) ---------- */
     async function fetchCandles(pair, tf, limit=240){
-      const url = `/api/candles-td?pair=${encodeURIComponent(pair)}&tf=${tf}&limit=${limit}`;
-      setText('dbgUrl', url);
-      try{
-        const r = await fetch(url, { cache:'no-store' });
-        setText('dbgHttp', `${r.status} ${r.statusText}`);
-        const data = await r.json().catch(()=>({}));
-        return { ok:r.ok, status:r.status, data };
-      }catch(e){
-        setText('dbgHttp', `fetch error`);
-        return { ok:false, status:0, data:null };
+      const urls = [
+        `/api/candles-db?pair=${encodeURIComponent(pair)}&tf=${tf}&limit=${limit}`,
+        `/api/candles-db-resampled?pair=${encodeURIComponent(pair)}&fromTf=1m&toTf=${tf}&take=${limit*5}`,
+        `/api/td-candles?pair=${encodeURIComponent(pair)}&tf=${tf}&limit=${limit}`,
+        `/api/candles-av?pair=${encodeURIComponent(pair)}&tf=${tf}&limit=${limit}`,
+        `/api/candles?pair=${encodeURIComponent(pair)}&tf=${tf}&limit=${limit}`,
+        `/api/series?pair=${encodeURIComponent(pair)}&tf=${tf}`
+      ];
+      let lastErr = 'no endpoint';
+      for (const url of urls){
+        try{
+          setText('#dbgUrl', url);
+          const r = await fetch(url, { cache:'no-store' });
+          setText('#dbgHttp', `${r.status} ${r.statusText}`);
+          if (r.ok) return r.json();
+          lastErr = await r.text();
+        }catch(e){ lastErr = String(e); }
       }
-    }
-    async function fetchQuote(pair){
-      const url = `/api/quote-td?pair=${encodeURIComponent(pair)}`;
-      try{
-        const r = await fetch(url, { cache:'no-store' });
-        if (!r.ok) return null;
-        return await r.json();
-      }catch{ return null; }
-    }
-
-    function draw(bars, pair, tf, source){
-      ensureChart();
-      candle.setData(bars);
-      chart.timeScale().fitContent();                 // ✅ 데이터 세팅 후 가시영역 보정
-      setText('src', source || '—');
-      setText('dbgLen', bars.length);
-      setText('status', `ok • ${new Date().toLocaleTimeString()} • ${pair} ${tf} • bars=${bars.length}`);
-      const last = bars[bars.length-1];
-      if (last){
-        lastBar = last;
-        setNum('pLast', last.close);
-        setNum('pO', last.open); setNum('pH', last.high); setNum('pL', last.low); setNum('pC', last.close);
-      }
+      throw new Error(lastErr);
     }
 
     async function reload(){
       clearTimeout(timer);
-      const pair = $('pair')?.value ?? 'USD-KRW';
-      const tf   = $('tf')?.value   ?? '30m';
-      const res = await fetchCandles(pair, tf, tf==='1y'?365:240);
-
-      if (res.ok && res?.data?.points) {
-        const bars = toCandles(res.data.points, tf);
-        if (bars.length === 0) {
-          setText('status', '데이터 없음(0 bars)'); $('status').className='bad';
-        } else {
-          draw(bars, pair, tf, res.data.source); $('status').className='ok';
-          // 현재가 보정
-          const q = await fetchQuote(pair);
-          if (q && Number.isFinite(q.last)) setNum('pLast', q.last);
-        }
+      const pair = $('#pair')?.value ?? 'USD-KRW';
+      const tf   = $('#tf')?.value   ?? '1d';
+      try{
+        const { points, source } = await fetchCandles(pair, tf, tf==='1y'? 120 : 240);
+        draw(points, pair, tf, source);
+      }catch(e){
+        console.error(e);
+        setText('#status','에러: '+String(e).slice(0,140));
+        setText('#dbgMode','error');
+      }finally{
         timer = setTimeout(reload, REFRESH_MS);
-        return;
       }
-
-      if (res.status === 429) {
-        setText('status', '요청 제한(429): 무료 키 호출 한도 초과. 70초 후 자동 재시도합니다.'); $('status').className='bad';
-        timer = setTimeout(reload, RATE_LIMIT_COOLDOWN);
-        return;
-      }
-
-      setText('status', '에러: ' + (res.status || 'network')); $('status').className='bad';
-      timer = setTimeout(reload, REFRESH_MS);
     }
 
-    $('reload').addEventListener('click', reload);
-    $('pair').addEventListener('change', reload);
-    $('tf').addEventListener('change', reload);
-    window.addEventListener('load', reload);
+    on('#reload','click', reload);
+    on('#pair','change', reload);
+    on('#tf','change', reload);
+
+    // 부팅 시: 라이브러리 로드 시도 후 첫 렌더
+    (async () => {
+      const ok = await tryLoadLightweightCharts();
+      setText('#libTag', 'lib: ' + (ok ? 'lwc' : 'none'));
+      window.addEventListener('load', reload);
+    })();
 </script>
 </body>
 </html>

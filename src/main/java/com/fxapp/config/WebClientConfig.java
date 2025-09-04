@@ -1,17 +1,19 @@
+// com/fxapp/config/WebClientConfig.java
 package com.fxapp.config;
 
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.reactive.function.client.WebClient;
 
 @Configuration
+@EnableConfigurationProperties(TwelveProps.class)
 public class WebClientConfig {
 
-    // 프로젝트 전역에서 쓸 단 하나의 WebClient (Twelve Data 전용)
-    @Bean
-    public WebClient webClient(TwelveDataProps props) {
+    @Bean("twelveClient")
+    public WebClient twelveClient(TwelveProps props) {
         return WebClient.builder()
-                .baseUrl(props.getBaseUrl())
+                .baseUrl(props.getBaseUrl())  // https://api.twelvedata.com
                 .build();
     }
 }

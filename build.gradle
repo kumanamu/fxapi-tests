@@ -6,39 +6,26 @@ plugins {
 
 group = 'com.fxapp'
 version = '0.1.0'
-
-java {
-    // toolchain으로 JDK 17 강제 (팀/CI 환경에서도 안정)
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
-    }
-}
+java { sourceCompatibility = '17' }
 
 repositories { mavenCentral() }
 
 dependencies {
-    // MVC (기본 서버)
-    implementation 'org.springframework.boot:spring-boot-starter-web'
-    // Thymeleaf 템플릿
-    implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
-    // WebClient 사용을 위해 WebFlux 스타터만 추가 (러너는 MVC가 우선)
-    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+    implementation 'org.springframework.boot:spring-boot-starter-web'         // MVC
+    implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'   // 템플릿
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'     // (선택) WebClient
+    implementation 'org.springframework.boot:spring-boot-starter-cache'       // 캐시 추상화
+    implementation 'com.github.ben-manes.caffeine:caffeine:3.1.8'             // Caffeine
 
-    // --- 캐시가 필요할 때만 켜기 ---
-    // implementation 'org.springframework.boot:spring-boot-starter-cache'
-    // implementation 'com.github.ben-manes.caffeine:caffeine:3.1.8'
+    // ✅ JPA & DB
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    runtimeOnly   'com.mysql:mysql-connector-j'   // MySQL 8+ 드라이버
+
+    // ✅ Lombok (선택이지만 @RequiredArgsConstructor 쓰면 필요)
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-    compileOnly 'org.projectlombok:lombok:1.18.34'
-    annotationProcessor 'org.projectlombok:lombok:1.18.34'
-
-    testCompileOnly 'org.projectlombok:lombok:1.18.34'
-    testAnnotationProcessor 'org.projectlombok:lombok:1.18.34'
-    implementation 'org.springframework.boot:spring-boot-starter-cache'
-    implementation 'com.github.ben-manes.caffeine:caffeine:3.1.8'
 }
 
-tasks.named('test') {
-    useJUnitPlatform()
-}
+tasks.named('test') { useJUnitPlatform() }
