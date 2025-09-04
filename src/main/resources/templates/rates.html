@@ -87,7 +87,7 @@
                 <span id="pair-label">원달러환율 (USD/KRW)</span>
                 <span class="last-quote" id="last-quote"></span>
             </div>
-            <div class="hint">※ 백엔드는 <b>XXX/KRW</b>로 조회합니다. 엔/위안은 <b>100 단위</b>로 환산하여 표시합니다.</div>
+            <div class="hint">※ 백엔드는 <b>XXX/KRW</b>로 조회. 엔/위안은 <b>100 단위</b>로 환산.</div>
             <div id="status"></div>
         </div>
     </aside>
@@ -110,11 +110,15 @@
 </div>
 
 <script>
-    // ===== 전역 & 설정 =====
-    let chart, candleSeries, resizeObs, pseudoTimer=null;
+    // ====== 상수 & 유틸 ======
     const $ = (id) => document.getElementById(id);
+    const PRICE_PREC = 2;
+    const KST_OFFSET = 9*3600; // seconds
+    const toKstSec = (utcSec)=> utcSec + KST_OFFSET;
+    const toUtcSec = (kstSec)=> kstSec - KST_OFFSET;
+    const fmt2 = (n)=> Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+    const minMove = Math.pow(10,-PRICE_PREC);
 
-    // 페어별 기준 단위
     const PAIR_CFG = {
       'USD/KRW': { title:'원달러환율',  basis:1,   basisLabel:'1 USD',  seed:1350 },
       'JPY/KRW': { title:'원엔화환율',  basis:100, basisLabel:'100 JPY', seed:900  },
@@ -123,7 +127,6 @@
       'GBP/KRW': { title:'원파운드환율', basis:1,   basisLabel:'1 GBP',  seed:1750 },
     };
 
-    // 자동 limit
     const AUTO_LIMIT = (tf) => ({
       '1s': 900,
       '1m': 720,
@@ -136,17 +139,9 @@
       '1M': 600
     }[tf] ?? 900);
 
-    // ===== 포맷/시간 =====
-    const PRICE_PREC = 2;
-    const minMoveFor = (p)=> Math.pow(10,-p);
-    const fmt2 = (n)=> {
-      try { return Number(n).toLocaleString(undefined,{minimumFractionDigits:PRICE_PREC,maximumFractionDigits:PRICE_PREC}); }
-      catch { return String(n); }
-    };
-
-    const KST_OFFSET = 9*3600; // seconds
-    const toKstSec = (utcSec)=> utcSec + KST_OFFSET;
-    const toUtcSec = (kstSec)=> kstSec - KST_OFFSET;
+    const TF_UNIT_SEC = (tf) => ({
+      '1s':1, '1m':60, '15m':900, '30m':1800, '1h':3600, '4h':14400
+    }[tf] ?? null);
 
     function tickMarkKSTFormatterFactory(currentTf) {
       return (time) => {
@@ -164,10 +159,6 @@
       };
     }
 
-    const TF_UNIT_SEC = (tf) => ({
-      '1s':1, '1m':60, '15m':900, '30m':1800, '1h':3600, '4h':14400
-    }[tf] ?? null);
-
     function floorToTfStartKst(kstSec, tf) {
       const unit = TF_UNIT_SEC(tf);
       if (unit) return kstSec - (kstSec % unit);
@@ -176,7 +167,7 @@
       if (tf === '1d') return dayStart;
 
       if (tf === '1w') {
-        const dow = new Date((toUtcSec(kstSec))*1000).getUTCDay(); // 0=일..6=토
+        const dow = new Date((toUtcSec(kstSec))*1000).getUTCDay(); // 0=일
         const daysFromMon = (dow + 6) % 7; // 월=0
         return dayStart - daysFromMon*86400;
       }
@@ -194,7 +185,6 @@
     function nextTfStartKst(fromKstStart, tf) {
       const unit = TF_UNIT_SEC(tf);
       if (unit) return fromKstStart + unit;
-
       if (tf === '1d') return fromKstStart + 86400;
       if (tf === '1w') return fromKstStart + 7*86400;
       if (tf === '1M') {
@@ -207,9 +197,110 @@
       return fromKstStart;
     }
 
-    // ===== 백엔드 tf 매핑 & 재시도 =====
+    // ====== IndexedDB 캐시 ======
+    const LocalOHLCStore = (()=> {
+      let dbp = null;
+      function open() {
+        if (dbp) return dbp;
+        dbp = new Promise((resolve, reject)=>{
+          const req = indexedDB.open('fx-cache', 1);
+          req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains('candles')) {
+              db.createObjectStore('candles', { keyPath: 'key' });
+            }
+          };
+          req.onsuccess = ()=> resolve(req.result);
+          req.onerror = ()=> reject(req.error);
+        });
+        return dbp;
+      }
+      async function get(key) {
+        try {
+          const db = await open();
+          return await new Promise((res, rej)=>{
+            const tx = db.transaction('candles','readonly');
+            const st = tx.objectStore('candles');
+            const rq = st.get(key);
+            rq.onsuccess = ()=> res(rq.result || null);
+            rq.onerror = ()=> rej(rq.error);
+          });
+        } catch { return null; }
+      }
+      async function set(key, value) {
+        try {
+          const db = await open();
+          return await new Promise((res, rej)=>{
+            const tx = db.transaction('candles','readwrite');
+            const st = tx.objectStore('candles');
+            st.put({ key, ...value });
+            tx.oncomplete = ()=> res(true);
+            tx.onerror = ()=> rej(tx.error);
+          });
+        } catch { /* ignore */ }
+      }
+      return { get, set };
+    })();
+
+    const pack = (bars)=> bars.map(b=>[b.time,b.open,b.high,b.low,b.close]);
+    const unpack = (rows)=> rows.map(a=>({time:a[0],open:a[1],high:a[2],low:a[3],close:a[4]}));
+
+    // ====== 정렬/보정 ======
+    function normalizeToKstSlots(bars, tf) {
+      // 1) 시간 스냅(KST 슬롯 시작시각으로)
+      const snapped = bars.map(b=>{
+        const tK = toKstSec(b.time);
+        const slotK = floorToTfStartKst(tK, tf);
+        return { time: toUtcSec(slotK), open:b.open, high:b.high, low:b.low, close:b.close };
+      });
+
+      // 2) 시간순 정렬
+      snapped.sort((a,b)=>a.time-b.time);
+
+      // 3) 타임칸 중복 병합(첫 open, 마지막 close, high=max, low=min)
+      const merged = [];
+      for (const b of snapped) {
+        const last = merged[merged.length-1];
+        if (last && last.time === b.time) {
+          last.high = Math.max(last.high, b.high);
+          last.low  = Math.min(last.low,  b.low);
+          last.close = b.close;
+        } else {
+          merged.push({...b});
+        }
+      }
+
+      // 4) 갭 채우기(이전 종가로 홀더 캔들)
+      const filled = [];
+      const unit = TF_UNIT_SEC(tf) || (tf==='1d'?86400:(tf==='1w'?7*86400:(tf==='1M'?2629800:60)));
+      let i = 0;
+      while (i < merged.length) {
+        const cur = merged[i];
+        filled.push(cur);
+        const next = merged[i+1];
+        if (next) {
+          let expect = cur.time + unit;
+          while (expect < next.time) {
+            const prevClose = filled[filled.length-1].close;
+            filled.push({ time: expect, open:prevClose, high:prevClose, low:prevClose, close:prevClose });
+            expect += unit;
+          }
+        }
+        i++;
+      }
+
+      // 5) 미래(아직 시작되지 않은 슬롯) 제거
+      const nowK = Math.floor(Date.now()/1000) + KST_OFFSET;
+      const currentStartK = floorToTfStartKst(nowK, tf);
+      const currentStartUtc = toUtcSec(currentStartK);
+      const safe = filled.filter(b => b.time <= currentStartUtc);
+
+      return safe;
+    }
+
+    // ====== 서버 통신 ======
     const TF_BACKEND = {
-      '1s': ['1m'],                 // 1초봉 → 1분 시드
+      '1s': ['1m'],
       '1m': ['1m','60'],
       '15m':['15m'],
       '30m':['30m'],
@@ -222,12 +313,12 @@
 
     async function fetchCandlesFromBackend(apiPair, tf, limit) {
       const tried = [];
-      const limitPlan = [Math.min(limit, 900), 480, 240, 120].filter((v,i,a)=>v>0 && a.indexOf(v)===i);
-      const tfCandidates = TF_BACKEND[tf] ?? [tf];
-
+      const plan = [Math.min(limit, 900), 480, 240, 120].filter((v,i,a)=>v>0 && a.indexOf(v)===i);
+      const tfs = TF_BACKEND[tf] ?? [tf];
       let lastErr = null;
-      for (const lc of limitPlan) {
-        for (const t of tfCandidates) {
+
+      for (const lc of plan) {
+        for (const t of tfs) {
           tried.push(`${t}/${lc}`);
           try {
             const url = `/api/td-candles?pair=${encodeURIComponent(apiPair)}&tf=${encodeURIComponent(t)}&limit=${lc}`;
@@ -237,17 +328,14 @@
             const vals = Array.isArray(body?.values) ? body.values : [];
             if (vals.length) return vals;
             lastErr = new Error('empty');
-          } catch (e) {
-            lastErr = e;
-          }
+          } catch (e) { lastErr = e; }
         }
       }
       const statusEl = $('status');
-      if (statusEl) statusEl.textContent = `백엔드 오류(가상 시드로 전환): ${lastErr?.message||'fetch fail'}\n시도: ${tried.join(', ')}`;
+      if (statusEl) statusEl.textContent = `백엔드 오류(가상/캐시 사용): ${lastErr?.message||'fail'}\n시도: ${tried.join(', ')}`;
       throw lastErr || new Error('fetch failed');
     }
 
-    // ===== 파싱/스케일 =====
     function parseCandles(values){
       return values.map(it=>{
         const t=(it.datetime||it.date||it.time);
@@ -262,7 +350,7 @@
         open:c.open*units, high:c.high*units, low:c.low*units, close:c.close*units }));
     }
 
-    // ===== 가상 시드 히스토리 생성(백엔드 실패 대비) =====
+    // ====== 가상 시드/라이브 ======
     function volatilityFor(tf){
       return ({
         '1s': 0.00020, '1m':0.00015, '15m':0.00025, '30m':0.00030,
@@ -273,17 +361,14 @@
     function buildSyntheticHistory(startPrice, tf, bars){
       const out = [];
       const nowKst = Math.floor(Date.now()/1000) + KST_OFFSET;
-      const endKst = floorToTfStartKst(nowKst, tf); // 현재 진행중 봉의 시작
+      const endKst = floorToTfStartKst(nowKst, tf);
       const unit = TF_UNIT_SEC(tf) || (tf==='1d'?86400:(tf==='1w'?7*86400:(tf==='1M'?2629800:60)));
-
       const sigma = Math.max(startPrice * volatilityFor(tf), 0.01);
-      // 과거로 bars-1개 생성
       let close = startPrice;
       for (let i=bars-1; i>=0; i--){
         const tKst = endKst - i*unit;
         const tUtc = toUtcSec(tKst);
         const open = close;
-        // 이전 변동에서 약간씩 노이즈
         const step = (Math.random()*2-1)*sigma;
         close = Math.max(0.01, open + step);
         const high = Math.max(open, close) + Math.random()*sigma*0.5;
@@ -293,7 +378,8 @@
       return out;
     }
 
-    // ===== 차트 보일러플레이트 =====
+    let chart, candleSeries, resizeObs, pseudoTimer=null;
+
     function ensureChart(currentTf){
       const L=window.LightweightCharts, statusEl=$('status');
       if(!L?.createChart){ statusEl.textContent='LightweightCharts 로드 실패'; return false; }
@@ -327,10 +413,10 @@
           upColor:'#10B981', downColor:'#EF4444',
           borderUpColor:'#10B981', borderDownColor:'#EF4444',
           wickUpColor:'#10B981', wickDownColor:'#EF4444',
-          priceFormat:{ type:'price', precision:PRICE_PREC, minMove:minMoveFor(PRICE_PREC) }
+          priceFormat:{ type:'price', precision:PRICE_PREC, minMove:minMove }
         });
       } else {
-        candleSeries.applyOptions({ priceFormat:{ type:'price', precision:PRICE_PREC, minMove:minMoveFor(PRICE_PREC) } });
+        candleSeries.applyOptions({ priceFormat:{ type:'price', precision:PRICE_PREC, minMove:minMove } });
       }
       if(!resizeObs){
         const cont=$('chart-area');
@@ -342,69 +428,79 @@
 
     function stopPseudoLive(){ if(pseudoTimer){ clearInterval(pseudoTimer); pseudoTimer=null; } }
 
-    // ===== 가짜 라이브 엔진 =====
-    function startPseudoLive(seedData, pair, tf){
+    function startPseudoLive(dataRef, pair, tf, cacheKey, maxBars){
       stopPseudoLive();
-      if(!seedData?.length || !candleSeries) return;
+      if(!dataRef?.length || !candleSeries) return;
 
       const vol = volatilityFor(tf);
       const tickMs = (tf==='1s') ? 250 : 1000;
       const cfg = PAIR_CFG[pair] || { basisLabel:'기준' };
 
-      const nowKst = Math.floor(Date.now()/1000) + KST_OFFSET;
-      let curStartKst = floorToTfStartKst(nowKst, tf);
-      let curStartUtc = toUtcSec(curStartKst);
+      let series = dataRef; // 원본 배열을 계속 업데이트
+      const nowK = Math.floor(Date.now()/1000) + KST_OFFSET;
+      let curStartK = floorToTfStartKst(nowK, tf);
+      let curStartUtc = toUtcSec(curStartK);
 
-      const lastSeed = seedData[seedData.length-1];
-      if (lastSeed.time < curStartUtc) {
-        const open = lastSeed.close;
-        candleSeries.update({ time:curStartUtc, open, high:open, low:open, close:open });
-      } else if (lastSeed.time > curStartUtc) {
-        curStartUtc = lastSeed.time;
-        curStartKst = toKstSec(curStartUtc);
-      }
-
-      let bar = { ...seedData[seedData.length-1] };
+      let bar = series[series.length-1];
       if (bar.time < curStartUtc) {
-        const o = seedData[seedData.length-1].close;
-        bar = { time: curStartUtc, open:o, high:o, low:o, close:o };
+        const open = bar.close;
+        bar = { time: curStartUtc, open, high:open, low:open, close:open };
+        series.push(bar);
+        candleSeries.update(bar);
+      } else {
+        bar = { ...bar };
       }
       let lastClose = bar.close;
 
-      pseudoTimer=setInterval(()=> {
-        try{
-          let nowK = Math.floor(Date.now()/1000) + KST_OFFSET;
-          let nextK = nextTfStartKst(curStartKst, tf);
+      let lastSavedSlot = bar.time;
 
-          let loopGuard = 0;
-          while (nowK >= nextK && loopGuard++ < 10) {
+      pseudoTimer=setInterval(async ()=> {
+        try{
+          // 경계 보정(탭 비활성 등으로 누락 방지)
+          let nowKst = Math.floor(Date.now()/1000) + KST_OFFSET;
+          let nextK = nextTfStartKst(curStartK, tf);
+          let guard = 0;
+          while (nowKst >= nextK && guard++ < 10) {
+            // 이전 바 완성 -> 캐시에 저장될 데이터가 됨
             const open = lastClose;
-            curStartKst = nextK;
-            curStartUtc = toUtcSec(curStartKst);
+            curStartK = nextK;
+            curStartUtc = toUtcSec(curStartK);
             bar = { time: curStartUtc, open, high: open, low: open, close: open };
+            series.push(bar);
+            if (series.length > maxBars) series = series.slice(series.length - maxBars);
             candleSeries.update(bar);
-            nextK = nextTfStartKst(curStartKst, tf);
+            nextK = nextTfStartKst(curStartK, tf);
+
+            // write-behind 저장(슬롯 넘어갈 때만)
+            if (cacheKey && lastSavedSlot !== bar.time) {
+              lastSavedSlot = bar.time;
+              const safe = normalizeToKstSlots(series, tf).slice(-maxBars);
+              await LocalOHLCStore.set(cacheKey, { updatedAt: Date.now(), bars: pack(safe) }).catch(()=>{});
+            }
           }
 
+          // 현재 진행중 바를 랜덤 워크로 흔들기
           const sigma = Math.max(lastClose * vol, 0.01);
           const step = (Math.random()*2 - 1) * sigma;
           const close = Math.max(0.01, lastClose + step);
-          const high  = Math.max(bar.high, close);
-          const low   = Math.min(bar.low,  close);
-          bar = { ...bar, close, high, low };
-          candleSeries.update(bar);
+          bar.high = Math.max(bar.high, close);
+          bar.low  = Math.min(bar.low,  close);
+          bar.close = close;
           lastClose = close;
 
+          candleSeries.update(bar);
           $('last-quote').textContent = `${cfg.basisLabel} ≈ ${fmt2(bar.close)} KRW`;
-          $('status').textContent = `실시간 표시(가상): ${pair} • ${tf}`;
+          $('status').textContent = `실시간 표시(캐시/가상): ${pair} • ${tf}`;
         }catch{}
       }, tickMs);
     }
 
-    // ===== 로드 & 전환 =====
+    // ====== 로드 & 전환 ======
     async function loadChart(pair, tf){
       const statusEl=$('status'), lastEl=$('last-quote'), labelEl=$('pair-label');
       const cfg=PAIR_CFG[pair]; if(!cfg){ statusEl.textContent='지원하지 않는 통화'; return; }
+      const limit = AUTO_LIMIT(tf);
+      const cacheKey = `${pair}|${tf}`;
 
       labelEl.textContent=`${cfg.title} (${pair})`;
       statusEl.textContent='불러오는 중…'; lastEl.textContent='';
@@ -412,31 +508,56 @@
       if(!ensureChart(tf)) return;
       stopPseudoLive();
 
-      const limit = AUTO_LIMIT(tf);
+      // 1) 캐시 먼저: 즉시 표시
+      let cached = await LocalOHLCStore.get(cacheKey);
+      let data = [];
+      if (cached?.bars?.length) {
+        data = unpack(cached.bars);
+        data = normalizeToKstSlots(data, tf).slice(-limit);
+        candleSeries.setData(data);
+        chart.timeScale().fitContent();
+        const last=data[data.length-1].close;
+        $('last-quote').textContent=`${cfg.basisLabel} ≈ ${fmt2(last)} KRW`;
+        statusEl.textContent=`캐시 로드: ${pair} • ${tf} • ${data.length}개`;
+      }
 
-      let data;
+      // 2) 서버 시도 → 성공 시 캐시와 병합 후 갱신
+      let serverOK = false;
       try {
         const raw = await fetchCandlesFromBackend(pair, tf, limit);
-        const base = parseCandles(raw);           // UTC
-        data = applyBasis(base, cfg.basis);       // 엔/위안 ×100
-        if (!data.length) throw new Error('empty');
+        const base = parseCandles(raw);                 // UTC
+        let srv = applyBasis(base, cfg.basis);          // 엔/위안 ×100
+        srv = normalizeToKstSlots(srv, tf).slice(-limit);
+
+        // 캐시와 병합(단순 합집합 → 정규화)
+        const merged = normalizeToKstSlots([...(data||[]), ...srv], tf).slice(-limit);
+
+        if (!data.length || merged[merged.length-1].time !== (data[data.length-1]?.time) || merged[merged.length-1].close !== (data[data.length-1]?.close)) {
+          candleSeries.setData(merged);
+          chart.timeScale().fitContent();
+          data = merged;
+        }
+
+        await LocalOHLCStore.set(cacheKey, { updatedAt: Date.now(), bars: pack(data) }).catch(()=>{});
+        serverOK = true;
+
+        const last=data[data.length-1].close;
+        $('last-quote').textContent=`${cfg.basisLabel} ≈ ${fmt2(last)} KRW`;
+        statusEl.textContent=`완료: ${pair} • ${tf} • ${data.length}개 (서버/캐시 병합)`;
       } catch (e) {
-        // === 백엔드 실패 → 가상 시드로 전환 ===
-        const seedStart = cfg.seed || 1000;
-        data = buildSyntheticHistory(seedStart, tf, Math.max(60, Math.min(limit, 600)));
-        statusEl.textContent = `백엔드 오류 → 가상 데이터로 전환 (${e?.message||'unknown'})`;
+        if (!data.length) {
+          // 캐시도 없으면 가상 시드
+          data = buildSyntheticHistory(cfg.seed || 1000, tf, Math.max(60, Math.min(limit, 600)));
+          candleSeries.setData(data);
+          chart.timeScale().fitContent();
+          statusEl.textContent = `백엔드 오류 → 가상 데이터로 전환 (${e?.message||'unknown'})`;
+        } else {
+          statusEl.textContent += `\n서버 실패(캐시로 유지): ${e?.message||'unknown'}`;
+        }
       }
 
-      candleSeries.setData(data);
-      chart.timeScale().fitContent();
-
-      const last=data[data.length-1].close;
-      $('last-quote').textContent=`${cfg.basisLabel} ≈ ${fmt2(last)} KRW`;
-      if (!statusEl.textContent.startsWith('백엔드 오류')) {
-        statusEl.textContent=`완료: ${pair} • ${tf} • ${data.length}개`;
-      }
-
-      startPseudoLive(data, pair, tf);
+      // 3) 가짜 라이브 시작(완성 봉을 캐시에 write-behind)
+      startPseudoLive(data, pair, tf, cacheKey, limit);
     }
 
     function resetChart(){
@@ -446,6 +567,7 @@
       chart=null; candleSeries=null;
     }
 
+    // ====== 부트스트랩 ======
     document.addEventListener('DOMContentLoaded', async ()=>{
       const pairEl=$('pair');
       const tfWrap=$('tf-inside');
