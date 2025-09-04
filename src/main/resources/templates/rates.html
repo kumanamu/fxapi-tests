@@ -4,319 +4,309 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>KRW 기준 환율</title>
-
-    <!-- lightweight-charts -->
-    <script src="https://unpkg.com/lightweight-charts@4.3.0/dist/lightweight-charts.standalone.production.js" defer></script>
-
     <style>
-        :root {
-          --bg: #0B1221;
-          --panel: #0F172A;
-          --text: #D1D5DB;
-          --muted: #9CA3AF;
-          --up: #10B981;
-          --down: #EF4444;
-          --grid: rgba(255,255,255,0.06);
-          --accent: #2563EB;
-        }
-        html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
-        .wrap { display: grid; grid-template-columns: 320px 1fr; gap: 16px; height: 100%; box-sizing: border-box; padding: 16px; }
-        .panel { background: var(--panel); border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 6px 24px rgba(0,0,0,.2); }
-        .panel h2 { margin: 0 0 8px; font-size: 18px; }
-        .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-        label { font-size: 12px; color: var(--muted); }
-        select, input[type="number"] {
-          background: #0b1221; color: var(--text); border: 1px solid #1F2937; border-radius: 10px; padding: 8px 10px; outline: none;
-        }
-        button.tf { background: #111827; color: var(--text); border: 1px solid #1F2937; border-radius: 999px; padding: 8px 12px; cursor: pointer; }
-        button.tf.active { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(37,99,235,.25) inset; }
-        .chart-card { background: var(--panel); border-radius: 16px; padding: 12px; height: 100%; display: flex; flex-direction: column; box-shadow: 0 6px 24px rgba(0,0,0,.2); }
-        #chart-area { flex: 1; min-height: 520px; border-radius: 12px; }
-        #status { font-size: 12px; color: var(--muted); margin-top: 6px; min-height: 16px; }
-        .pair-title { font-size: 16px; font-weight: 600; display: flex; align-items: baseline; gap: 8px; }
-        .last-quote { font-size: 14px; color: var(--text); }
-        .hint { font-size: 12px; color: var(--muted); }
-        .divider { height: 1px; background: #1F2937; margin: 8px 0; }
+        :root{--bg:#0B1221;--panel:#0F172A;--text:#D1D5DB;--muted:#9CA3AF;--up:#10B981;--down:#EF4444;--grid:rgba(255,255,255,.06);--accent:#2563EB}
+        html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+        .wrap{display:grid;grid-template-columns:320px 1fr;gap:16px;height:100%;box-sizing:border-box;padding:16px}
+        .panel{background:var(--panel);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:16px;box-shadow:0 6px 24px rgba(0,0,0,.2)}
+        .panel h2{margin:0 0 8px;font-size:18px}
+        .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+        label{font-size:12px;color:var(--muted)}
+        select{background:#0b1221;color:var(--text);border:1px solid #1F2937;border-radius:10px;padding:8px 10px;outline:none;width:100%}
+        .chart-card{background:var(--panel);border-radius:16px;padding:12px;height:100%;display:flex;flex-direction:column;box-shadow:0 6px 24px rgba(0,0,0,.2);position:relative}
+        #chart-area{flex:1;min-height:560px;border-radius:12px;position:relative}
+        #status{font-size:12px;color:var(--muted);margin-top:6px;min-height:16px;white-space:pre-line}
+        .pair-title{font-size:16px;font-weight:600;display:flex;align-items:baseline;gap:8px}
+        .last-quote{font-size:14px}
+        .hint{font-size:12px;color:var(--muted)}
+        .divider{height:1px;background:#1F2937;margin:8px 0}
+        .tf-inside{position:absolute;left:16px;top:16px;display:flex;gap:6px;z-index:10;background:rgba(11,18,33,.6);backdrop-filter:blur(6px);padding:6px;border-radius:12px;border:1px solid #1F2937}
+        .tf-btn{background:#111827;color:var(--text);border:1px solid #1F2937;border-radius:999px;padding:6px 10px;cursor:pointer;font-size:12px}
+        .tf-btn.active{border-color:var(--accent);box-shadow:0 0 0 2px rgba(37,99,235,.25) inset}
+        @media (max-width:900px){.wrap{grid-template-columns:1fr}}
     </style>
+
+    <!-- Lightweight Charts 폴백 로더(standalone UMD만 사용) -->
+    <script>
+        (function () {
+          const cdn = (v, f) => `https://cdn.jsdelivr.net/npm/lightweight-charts@${v}/dist/${f}`;
+          const unp = (v, f) => `https://unpkg.com/lightweight-charts@${v}/dist/${f}`;
+          const versions = ["4.3.0","4"];
+          const files = [
+            "lightweight-charts.standalone.production.min.js",
+            "lightweight-charts.standalone.production.js",
+            "lightweight-charts.standalone.development.js",
+          ];
+          const candidates = [];
+          versions.forEach(v => files.forEach(f => candidates.push(cdn(v,f))));
+          versions.forEach(v => files.forEach(f => candidates.push(unp(v,f))));
+          window.__loadLwc = () =>
+            new Promise((resolve, reject) => {
+              let i=0;
+              const tryNext=()=>{
+                if(i>=candidates.length) return reject(new Error("Lightweight Charts 로드 실패"));
+                const url=candidates[i++], s=document.createElement("script");
+                s.src=url; s.async=true;
+                s.onload=()=>{
+                  const L=window.LightweightCharts;
+                  if(!L?.createChart){ s.remove(); tryNext(); return; }
+                  const tmp=document.createElement("div"); document.body.appendChild(tmp);
+                  try{
+                    const c=L.createChart(tmp);
+                    if(typeof c?.addCandlestickSeries!=="function"){ s.remove(); c?.remove?.(); tmp.remove(); tryNext(); return; }
+                    c.remove(); tmp.remove(); resolve();
+                  }catch{ s.remove(); tmp.remove(); tryNext(); }
+                };
+                s.onerror=tryNext; document.head.appendChild(s);
+              };
+              tryNext();
+            });
+        })();
+    </script>
 </head>
 <body>
 <div class="wrap">
-    <!-- 좌측 컨트롤 패널: KRW 기준 5통화만 -->
     <aside class="panel">
         <div>
             <h2>설정</h2>
-
             <div class="row" style="margin-top:8px;">
-                <div style="display:flex; flex-direction:column; gap:6px; min-width:100%;">
-                    <label for="pair">통화 (KRW 기준)</label>
-                    <!-- 화면엔 KRW/XXX로 보이지만, 내부적으로는 API 쿼리를 위해 XXX/KRW로 매핑 후 역수 처리 -->
+                <div style="display:flex;flex-direction:column;gap:6px;min-width:100%;">
+                    <label for="pair">통화 쌍 (기준단위 → KRW)</label>
                     <select id="pair">
-                        <option value="KRW/USD" selected>KRW/USD (달러)</option>
-                        <option value="KRW/JPY">KRW/JPY (엔)</option>
-                        <option value="KRW/CNY">KRW/CNY (위안)</option>
-                        <option value="KRW/GBP">KRW/GBP (파운드)</option>
-                        <option value="KRW/EUR">KRW/EUR (유로)</option>
+                        <option value="USD/KRW" selected>원달러환율 (1 USD → KRW)</option>
+                        <option value="JPY/KRW">원엔화환율 (100 JPY → KRW)</option>
+                        <option value="CNY/KRW">원위안환율 (100 CNY → KRW)</option>
+                        <option value="EUR/KRW">원유로환율 (1 EUR → KRW)</option>
+                        <option value="GBP/KRW">원파운드환율 (1 GBP → KRW)</option>
                     </select>
                 </div>
             </div>
 
-            <div class="row" style="margin-top:8px;">
-                <div style="display:flex; flex-direction:column; gap:6px; min-width:100%;">
-                    <label>타임프레임</label>
-                    <div id="tf-buttons" class="row">
-                        <button class="tf active" data-tf="1h">1h</button>
-                        <button class="tf" data-tf="30m">30m</button>
-                        <button class="tf" data-tf="15m">15m</button>
-                        <button class="tf" data-tf="4h">4h</button>
-                        <button class="tf" data-tf="1day">1d</button>
-                        <button class="tf" data-tf="1week">1w</button>
-                        <button class="tf" data-tf="1month">1M</button>
-                    </div>
-                </div>
-            </div>
-
-            <div class="row" style="margin-top:8px;">
-                <div style="display:flex; flex-direction:column; gap:6px; min-width:100%;">
-                    <label for="limit">캔들 수</label>
-                    <input id="limit" type="number" min="50" max="5000" value="240" />
-                </div>
-            </div>
-
-            <div class="row" style="margin-top:8px;">
-                <label style="display:flex; align-items:center; gap:8px;">
-                    <input id="live" type="checkbox" />
-                    실시간(간이)
-                </label>
-            </div>
-
             <div class="divider"></div>
             <div class="pair-title">
-                <span id="pair-label">KRW/USD</span>
+                <span id="pair-label">원달러환율 (USD/KRW)</span>
                 <span class="last-quote" id="last-quote"></span>
             </div>
-            <div class="hint">※ 항상 <b>KRW 기준</b>으로 표시합니다. (백엔드는 XXX/KRW를 조회, 프론트에서 역수 처리)</div>
-
+            <div class="hint">※ 백엔드는 <b>XXX/KRW</b>로 조회합니다. 엔/위안은 <b>100 단위</b>로 환산하여 표시합니다.</div>
             <div id="status"></div>
         </div>
     </aside>
 
-    <!-- 우측 차트 -->
     <main class="chart-card">
-        <div id="chart-area"></div>
+        <div id="chart-area">
+            <!-- 차트 내부 타임프레임 -->
+            <div class="tf-inside" id="tf-inside">
+                <button class="tf-btn active" data-tf="1m">1분</button>
+                <button class="tf-btn" data-tf="15m">15분</button>
+                <button class="tf-btn" data-tf="1h">1시간</button>
+                <button class="tf-btn" data-tf="1d">1일</button>
+                <button class="tf-btn" data-tf="1w">1주</button>
+                <button class="tf-btn" data-tf="1M">1개월</button>
+            </div>
+        </div>
     </main>
 </div>
 
 <script>
-    // ========= 전역 =========
-    let chart, candleSeries, resizeObs, liveTimer = null;
-
-    // KRW 기준 표시 <-> 백엔드 심볼 매핑 (조회는 XXX/KRW)
-    const DISPLAY_TO_API = {
-      'KRW/USD': 'USD/KRW',
-      'KRW/JPY': 'JPY/KRW',
-      'KRW/CNY': 'CNY/KRW',
-      'KRW/GBP': 'GBP/KRW',
-      'KRW/EUR': 'EUR/KRW',
-    };
-
+    // ===== 전역 & 설정 =====
+    let chart, candleSeries, resizeObs, pseudoTimer=null;
     const $ = (id) => document.getElementById(id);
 
-    function ensureReady() {
-      if (!chart) {
-        const cont = $('chart-area');
-        chart = LightweightCharts.createChart(cont, {
-          layout: { textColor: '#D1D5DB', background: { type: 'solid', color: '#0B1221' } },
-          grid: { vertLines: { color: 'rgba(255,255,255,0.06)' }, horzLines: { color: 'rgba(255,255,255,0.06)' } },
-          timeScale: { timeVisible: true, borderVisible: false },
-          rightPriceScale: { borderVisible: false },
-          crosshair: { mode: 0 }
-        });
-      }
-      if (!candleSeries) {
-        candleSeries = chart.addCandlestickSeries({
-          upColor: '#10B981', downColor: '#EF4444',
-          borderUpColor: '#10B981', borderDownColor: '#EF4444',
-          wickUpColor: '#10B981', wickDownColor: '#EF4444',
-          priceFormat: { type: 'price', precision: 6, minMove: 0.000001 }
-        });
-      }
-    }
+    // 페어별 기준 단위 설정
+    const PAIR_CFG = {
+      'USD/KRW': { title:'원달러환율', basis:1,   basisLabel:'1 USD'  },
+      'JPY/KRW': { title:'원엔화환율', basis:100, basisLabel:'100 JPY' },
+      'CNY/KRW': { title:'원위안환율', basis:100, basisLabel:'100 CNY' },
+      'EUR/KRW': { title:'원유로환율', basis:1,   basisLabel:'1 EUR'  },
+      'GBP/KRW': { title:'원파운드환율', basis:1, basisLabel:'1 GBP'  },
+    };
 
-    function initChart() {
-      ensureReady();
-      if (!resizeObs) {
-        const cont = $('chart-area');
-        resizeObs = new ResizeObserver(() => {
-          try { chart.timeScale().fitContent(); } catch (_) {}
-        });
-        resizeObs.observe(cont);
-      }
-    }
+    // 타임프레임별 자동 캔들 수(대략적인 히스토리 길이)
+    const AUTO_LIMIT = (tf) => ({
+      '1m':1440,'15m':1200,'1h':900,'4h':800,'1d':1000,'1w':800,'1M':600
+    }[tf] ?? 900);
 
-    // 백엔드 캔들을 받아 KRW 기준으로 역수 변환
-    function invertCandles(candles) {
-      // 역수 규칙: O=1/O, H=1/L, L=1/H, C=1/C
-      return candles.map(c => ({
-        time: c.time,
-        open: 1 / c.open,
-        high: 1 / c.low,
-        low:  1 / c.high,
-        close: 1 / c.close,
-      }));
-    }
-
-    function parseCandles(values) {
-      return values.map(it => ({
-        time: Math.floor(new Date((it.datetime || it.date || it.time) + 'Z').getTime() / 1000),
-        open: Number(it.open),
-        high: Number(it.high),
-        low:  Number(it.low),
-        close:Number(it.close),
-      }));
-    }
-
-    function precisionFor(v) {
-      if (!isFinite(v) || v === 0) return 6;
-      const a = Math.abs(v);
-      if (a >= 1) return 2;
-      if (a >= 0.1) return 3;
-      if (a >= 0.01) return 4;
+    function precisionFor(v){
+      if (!isFinite(v)||v===0) return 2;
+      const a=Math.abs(v);
+      if(a>=10000) return 0;
+      if(a>=1000)  return 1;
+      if(a>=100)   return 1;
+      if(a>=10)    return 2;
+      if(a>=1)     return 3;
+      if(a>=0.1)   return 4;
       return 6;
     }
+    const minMoveFor = (p)=>Math.pow(10,-p);
+    function fmt(n,p){ try{ return Number(n).toLocaleString(undefined,{minimumFractionDigits:p,maximumFractionDigits:p}); }catch{ return String(n); } }
 
-    function fmt(n, p) {
-      try {
-        return Number(n).toLocaleString(undefined, { minimumFractionDigits: p, maximumFractionDigits: p });
-      } catch { return String(n); }
+    function parseCandles(values){
+      return values.map(it=>{
+        const t=(it.datetime||it.date||it.time);
+        return { time: Math.floor(new Date((t&&t.endsWith('Z'))?t:(t+'Z')).getTime()/1000),
+                 open:+it.open, high:+it.high, low:+it.low, close:+it.close };
+      });
+    }
+    // 기준 단위(1 또는 100)로 스케일
+    function applyBasis(cs, units){
+      if(units===1) return cs;
+      return cs.map(c=>({ time:c.time,
+        open:c.open*units, high:c.high*units, low:c.low*units, close:c.close*units }));
     }
 
-    async function fetchCandles(apiPair, tf, limit) {
-      const url = `/api/td-candles?pair=${encodeURIComponent(apiPair)}&tf=${encodeURIComponent(tf)}&limit=${limit}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = await res.json();
-      return Array.isArray(body?.values) ? body.values : [];
+    function ensureChart(){
+      const L=window.LightweightCharts, statusEl=$('status');
+      if(!L?.createChart){ statusEl.textContent='LightweightCharts 로드 실패'; return false; }
+      if(!chart){
+        const cont=$('chart-area');
+        chart=L.createChart(cont,{
+          layout:{ textColor:'#D1D5DB', background:{ type:'solid', color:'#0B1221' } },
+          grid:{ vertLines:{ color:'rgba(255,255,255,0.06)' }, horzLines:{ color:'rgba(255,255,255,0.06)' } },
+          timeScale:{ timeVisible:true, borderVisible:false },
+          rightPriceScale:{ borderVisible:false },
+          crosshair:{ mode:0 }
+        });
+      }
+      if(!candleSeries){
+        candleSeries=chart.addCandlestickSeries({
+          upColor:'#10B981', downColor:'#EF4444',
+          borderUpColor:'#10B981', borderDownColor:'#EF4444',
+          wickUpColor:'#10B981', wickDownColor:'#EF4444',
+          priceFormat:{ type:'price', precision:1, minMove:minMoveFor(1) }
+        });
+      }
+      if(!resizeObs){
+        const cont=$('chart-area');
+        resizeObs=new ResizeObserver(()=>{ try{ chart.timeScale().fitContent(); }catch{} });
+        resizeObs.observe(cont);
+      }
+      return true;
     }
 
-    async function loadChart(displayPair, tf, limit) {
-      ensureReady();
-      const statusEl = $('status');
-      const lastEl = $('last-quote');
-      const labelEl = $('pair-label');
+    async function fetchCandles(apiPair, tf, limit){
+      const url=`/api/td-candles?pair=${encodeURIComponent(apiPair)}&tf=${encodeURIComponent(tf)}&limit=${limit}`;
+      const res=await fetch(url);
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body=await res.json();
+      return Array.isArray(body?.values)?body.values:[];
+    }
 
-      labelEl.textContent = displayPair;
-      statusEl.textContent = '불러오는 중…';
-      lastEl.textContent = '';
+    function stopPseudoLive(){ if(pseudoTimer){ clearInterval(pseudoTimer); pseudoTimer=null; } }
 
-      const apiPair = DISPLAY_TO_API[displayPair];
-      if (!apiPair) {
-        statusEl.textContent = '지원하지 않는 통화';
-        throw new Error('Unsupported display pair');
+    function tfNextTimeSec(lastTimeSec, tf){
+      if(tf==='1M'){
+        const d=new Date(lastTimeSec*1000);
+        const y=d.getUTCFullYear(), m=d.getUTCMonth();
+        const next=Date.UTC(m===11?y+1:y,(m+1)%12,1,0,0,0);
+        return Math.floor(next/1000);
       }
+      const dur=({'1m':60,'15m':900,'30m':1800,'1h':3600,'4h':14400,'1d':86400,'1w':604800}[tf] ?? 3600);
+      return lastTimeSec+dur;
+    }
 
-      const raw = await fetchCandles(apiPair, tf, limit);
-      if (raw.length === 0) {
-        statusEl.textContent = '데이터 없음';
-        throw new Error('No candles');
-      }
+    function startPseudoLive(seedData, pair, tf){
+      stopPseudoLive();
+      if(!seedData?.length || !candleSeries) return;
 
-      // 백엔드(XXX/KRW) → 정방향 캔들 → KRW 기준으로 역수 변환
-      const baseCandles = parseCandles(raw);
-      const krwBaseCandles = invertCandles(baseCandles);
+      const { basisLabel } = PAIR_CFG[pair] || { basisLabel:'기준' };
+      let bar={ ...seedData[seedData.length-1] };
+      let lastClose=bar.close;
 
-      // 자릿수 동적 적용
-      const last = krwBaseCandles[krwBaseCandles.length - 1].close;
-      const prec = precisionFor(last);
-      candleSeries.applyOptions({ priceFormat: { type: 'price', precision: prec, minMove: Number((1).toFixed(prec)) / (10 ** prec) || 0.000001 } });
+      const baseRange=Math.max(bar.high-bar.low, Math.abs(bar.close-bar.open));
+      const sigma = tf==='1m'
+        ? (baseRange>0? baseRange/120 : Math.max(lastClose*0.0003, 1e-9))
+        : (baseRange>0? baseRange/80  : Math.max(lastClose*0.0005, 1e-9));
 
-      candleSeries.setData(krwBaseCandles);
+      const tickMs = tf==='1m'? 500 : 1000;
+
+      pseudoTimer=setInterval(()=>{
+        try{
+          const nowSec=Math.floor(Date.now()/1000);
+          const nextT=tfNextTimeSec(bar.time, tf);
+
+          if(nowSec>=nextT){
+            const open=lastClose;
+            bar={ time:nextT, open, high:open, low:open, close:open };
+            candleSeries.update(bar);
+          }else{
+            const step=(Math.random()*2-1)*sigma;
+            const close=lastClose+step;
+            const high=Math.max(bar.high,close);
+            const low =Math.min(bar.low, close);
+            bar={ ...bar, close, high, low };
+            candleSeries.update(bar);
+            lastClose=close;
+          }
+
+          const prec=precisionFor(bar.close);
+          $('last-quote').textContent=`${basisLabel} ≈ ${fmt(bar.close, prec)} KRW`;
+          $('status').textContent=`완료: ${pair} • ${tf} •  실시간 표시 중`;
+        }catch{}
+      }, tickMs);
+    }
+
+    async function loadChart(pair, tf){
+      const statusEl=$('status'), lastEl=$('last-quote'), labelEl=$('pair-label');
+      const cfg=PAIR_CFG[pair]; if(!cfg){ statusEl.textContent='지원하지 않는 통화'; return; }
+
+      labelEl.textContent=`${cfg.title} (${pair})`;
+      statusEl.textContent='불러오는 중…'; lastEl.textContent='';
+
+      if(!ensureChart()) return;
+      chart.applyOptions({ timeScale:{ secondsVisible: tf==='1m', timeVisible:true, borderVisible:false } });
+
+      stopPseudoLive();
+
+      const raw=await fetchCandles(pair, tf, AUTO_LIMIT(tf));
+      if(raw.length===0){ statusEl.textContent='데이터 없음'; return; }
+
+      const base=parseCandles(raw);
+      const data=applyBasis(base, cfg.basis); // 엔/위안은 ×100
+
+      const last=data[data.length-1].close;
+      const prec=precisionFor(last);
+
+      candleSeries.applyOptions({ priceFormat:{ type:'price', precision:prec, minMove:minMoveFor(prec) } });
+      candleSeries.setData(data);
       chart.timeScale().fitContent();
 
-      lastEl.textContent = `1 KRW ≈ ${fmt(last, prec)} ${displayPair.split('/')[1]}`;
-      statusEl.textContent = `완료: ${displayPair} • ${tf} • ${krwBaseCandles.length}개`;
+      $('last-quote').textContent=`${cfg.basisLabel} ≈ ${fmt(last, prec)} KRW`;
+      statusEl.textContent=`완료: ${pair} • ${tf} • ${data.length}개`;
+
+      startPseudoLive(data, pair, tf);
     }
 
-    function reloadChart(displayPair, tf, limit) {
-      if (chart) { try { chart.remove(); } catch(_) {} }
-      chart = null; candleSeries = null;
-      initChart();
-      return loadChart(displayPair, tf, limit);
+    function resetChart(){
+      stopPseudoLive();
+      try{ if(resizeObs){ resizeObs.disconnect(); resizeObs=null; } }catch{}
+      try{ chart?.remove?.(); }catch{}
+      chart=null; candleSeries=null;
     }
 
-    function startLive(displayPair, tf) {
-      if (liveTimer) clearInterval(liveTimer);
-      liveTimer = setInterval(async () => {
-        try {
-          ensureReady();
-          const apiPair = DISPLAY_TO_API[displayPair];
-          const res = await fetch(`/api/td-candles?pair=${encodeURIComponent(apiPair)}&tf=${encodeURIComponent(tf)}&limit=1`);
-          if (!res.ok) return;
-          const json = await res.json();
-          const v = Array.isArray(json?.values) ? json.values[0] : null;
-          if (!v) return;
-          // 역수 변환 적용
-          const c = {
-            time: Math.floor(new Date((v.datetime || v.date || v.time) + 'Z').getTime() / 1000),
-            open: 1 / Number(v.open),
-            high: 1 / Number(v.low),
-            low:  1 / Number(v.high),
-            close:1 / Number(v.close),
-          };
-          candleSeries.update(c);
+    document.addEventListener('DOMContentLoaded', async ()=>{
+      const pairEl=$('pair');
+      const tfWrap=$('tf-inside');
 
-          const prec = precisionFor(c.close);
-          $('last-quote').textContent = `1 KRW ≈ ${fmt(c.close, prec)} ${displayPair.split('/')[1]}`;
-        } catch(_) {}
-      }, 3000);
-    }
+      try{ await window.__loadLwc(); }
+      catch(e){ $('status').textContent='차트 라이브러리를 불러오지 못했습니다.\n→ 네트워크 또는 CDN 404'; console.error(e); return; }
 
-    document.addEventListener('DOMContentLoaded', async () => {
-      const pairEl = $('pair');
-      const tfButtons = $('tf-buttons');
-      const limitEl = $('limit');
-      const liveChk = $('live');
+      const State={ pair: pairEl.value, tf: (tfWrap.querySelector('.tf-btn.active')?.dataset.tf)||'1m' };
 
-      const State = {
-        displayPair: pairEl.value, // KRW/XXX
-        tf: (tfButtons.querySelector('button.tf.active')?.dataset.tf) || '1h',
-        limit: Number(limitEl.value) || 240,
-      };
+      await loadChart(State.pair, State.tf).catch(err=>{ $('status').textContent=`에러: ${err.message}`; console.error(err); });
 
-      initChart();
-      try { await loadChart(State.displayPair, State.tf, State.limit); } catch (e) { console.error(e); }
-      if (liveChk.checked) startLive(State.displayPair, State.tf);
-
-      tfButtons.addEventListener('click', async (e) => {
-        const btn = e.target.closest('button[data-tf]');
-        if (!btn) return;
-        tfButtons.querySelectorAll('button.tf').forEach(b => b.classList.remove('active'));
+      tfWrap.addEventListener('click', async (e)=>{
+        const btn=e.target.closest('button[data-tf]'); if(!btn) return;
+        tfWrap.querySelectorAll('.tf-btn').forEach(b=>b.classList.remove('active'));
         btn.classList.add('active');
-        State.tf = btn.dataset.tf;
-        try {
-          await reloadChart(State.displayPair, State.tf, State.limit);
-          if (liveChk.checked) startLive(State.displayPair, State.tf);
-        } catch (err) { console.error(err); }
+        State.tf=btn.dataset.tf;
+        resetChart();
+        await loadChart(State.pair, State.tf).catch(err=>{ $('status').textContent=`에러: ${err.message}`; console.error(err); });
       });
 
-      pairEl.addEventListener('change', async () => {
-        State.displayPair = pairEl.value;
-        try {
-          await reloadChart(State.displayPair, State.tf, State.limit);
-          if (liveChk.checked) startLive(State.displayPair, State.tf);
-        } catch (err) { console.error(err); }
-      });
-
-      limitEl.addEventListener('change', async () => {
-        State.limit = Number(limitEl.value) || 240;
-        try {
-          await reloadChart(State.displayPair, State.tf, State.limit);
-          if (liveChk.checked) startLive(State.displayPair, State.tf);
-        } catch (err) { console.error(err); }
-      });
-
-      liveChk.addEventListener('change', () => {
-        if (liveChk.checked) startLive(State.displayPair, State.tf);
-        else if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+      pairEl.addEventListener('change', async ()=>{
+        State.pair=pairEl.value;
+        resetChart();
+        await loadChart(State.pair, State.tf).catch(err=>{ $('status').textContent=`에러: ${err.message}`; console.error(err); });
       });
     });
 </script>
