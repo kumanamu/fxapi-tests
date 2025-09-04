@@ -10,7 +10,9 @@ import org.springframework.web.reactive.function.client.WebClient;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.*;
-
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+        name = "legacy.exh.enabled", havingValue = "true", matchIfMissing = false
+)
 @RestController
 public class CompactController {
 
@@ -63,4 +65,6 @@ public class CompactController {
         list.sort(Comparator.comparing(ChartPointDto::t));
         return list;
     }
+
+
 }
